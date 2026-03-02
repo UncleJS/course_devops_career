@@ -2,6 +2,8 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 08 of 15](https://img.shields.io/badge/module-08%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate%20%E2%86%92%20Advanced-red) ![Terraform 1.9+](https://img.shields.io/badge/Terraform-1.9%2B-7B42BC?logo=terraform&logoColor=white) ![OpenTofu 1.8+](https://img.shields.io/badge/OpenTofu-1.8%2B-FFDA18?logo=opentofu&logoColor=black) ![HCL · State Management](https://img.shields.io/badge/IaC-HCL%20%C2%B7%20State%20Management-5C4EE5)
+
 ---
 
 ## Table of Contents

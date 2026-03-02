@@ -2,6 +2,8 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 10 of 15](https://img.shields.io/badge/module-10%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate%20%E2%86%92%20Advanced-red) ![GitHub Actions](https://img.shields.io/badge/GitHub%20Actions-stable-2088FF?logo=githubactions&logoColor=white) ![GitLab CI](https://img.shields.io/badge/GitLab%20CI-stable-FC6D26?logo=gitlab&logoColor=white) ![Jenkins 2.479+](https://img.shields.io/badge/Jenkins-2.479%2B%20LTS-D24939?logo=jenkins&logoColor=white) ![Linux · Docker agents](https://img.shields.io/badge/agents-Linux%20%C2%B7%20Docker-grey?logo=docker&logoColor=white)
+
 ---
 
 ## Table of Contents

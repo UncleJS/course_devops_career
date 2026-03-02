@@ -4,6 +4,8 @@
 > **Audience**: Beginner → Intermediate  
 > **Prerequisites**: Module 06 (Kubernetes), Module 07 (Cloud Fundamentals)
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 11 of 15](https://img.shields.io/badge/module-11%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate-orange) ![Prometheus 2.55+](https://img.shields.io/badge/Prometheus-2.55%2B-E6522C?logo=prometheus&logoColor=white) ![Grafana 11.4+](https://img.shields.io/badge/Grafana-11.4%2B-F46800?logo=grafana&logoColor=white) ![Zabbix 7.0+](https://img.shields.io/badge/Zabbix-7.0%2B-CC0000) ![Prometheus compatible](https://img.shields.io/badge/ecosystem-Prometheus%20compatible-E6522C)
+
 ---
 
 ## Table of Contents

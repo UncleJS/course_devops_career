@@ -2,6 +2,8 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 05 of 15](https://img.shields.io/badge/module-05%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate-orange) ![Docker 27.0+](https://img.shields.io/badge/Docker-27.0%2B-2496ED?logo=docker&logoColor=white) ![Podman 5.0+](https://img.shields.io/badge/Podman-5.0%2B-892CA0?logo=podman&logoColor=white) ![OCI · Registry](https://img.shields.io/badge/standard-OCI%20%C2%B7%20Registry-blue)
+
 ---
 
 ## Table of Contents

@@ -2,6 +2,8 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 03 of 15](https://img.shields.io/badge/module-03%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Beginner-brightgreen) ![curl 8.5+](https://img.shields.io/badge/curl-8.5%2B-073551?logo=curl&logoColor=white) ![tcpdump 4.99+](https://img.shields.io/badge/tcpdump-4.99%2B-grey) ![netcat 1.10+](https://img.shields.io/badge/netcat-1.10%2B-grey) ![TCP/UDP · DNS · HTTP](https://img.shields.io/badge/protocols-TCP%2FUDP%20%C2%B7%20DNS%20%C2%B7%20HTTP-blue)
+
 ---
 
 ## Table of Contents

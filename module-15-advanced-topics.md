@@ -4,6 +4,8 @@
 > **Audience**: Intermediate → Advanced  
 > **Prerequisites**: All previous modules (01–14)
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 15 of 15](https://img.shields.io/badge/module-15%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Advanced-red) ![ArgoCD v2.13+](https://img.shields.io/badge/ArgoCD-v2.13%2B-EF7B4D?logo=argo&logoColor=white) ![Istio 1.24+](https://img.shields.io/badge/Istio-1.24%2B-466BB0?logo=istio&logoColor=white) ![Chaos Mesh 2.7+](https://img.shields.io/badge/Chaos%20Mesh-2.7%2B-red) ![GitOps · Service Mesh · Chaos](https://img.shields.io/badge/topics-GitOps%20%C2%B7%20Service%20Mesh%20%C2%B7%20Chaos-blueviolet)
+
 ---
 
 ## Table of Contents

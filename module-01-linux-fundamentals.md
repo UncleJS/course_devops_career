@@ -2,6 +2,8 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 01 of 15](https://img.shields.io/badge/module-01%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Beginner-brightgreen) ![bash 5.2+](https://img.shields.io/badge/bash-5.2%2B-4EAA25?logo=gnubash&logoColor=white) ![systemd 256+](https://img.shields.io/badge/systemd-256%2B-blueviolet) ![Linux](https://img.shields.io/badge/Linux-RHEL%20%C2%B7%20Ubuntu%20%C2%B7%20Debian-FCC624?logo=linux&logoColor=black)
+
 ---
 
 ## Table of Contents

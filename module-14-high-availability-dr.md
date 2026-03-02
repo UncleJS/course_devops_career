@@ -4,6 +4,8 @@
 > **Audience**: Beginner → Intermediate  
 > **Prerequisites**: Module 06 (Kubernetes), Module 07 (Cloud Fundamentals), Module 09 (Ansible)
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 14 of 15](https://img.shields.io/badge/module-14%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Advanced-red) ![MySQL 8.4+](https://img.shields.io/badge/MySQL-8.4%2B-4479A1?logo=mysql&logoColor=white) ![HAProxy 3.1+](https://img.shields.io/badge/HAProxy-3.1%2B-106DA9) ![Keepalived 2.3+](https://img.shields.io/badge/Keepalived-2.3%2B-grey) ![Replication · Failover](https://img.shields.io/badge/patterns-Replication%20%C2%B7%20Failover-blue)
+
 ---
 
 ## Table of Contents

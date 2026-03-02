@@ -2,6 +2,8 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 04 of 15](https://img.shields.io/badge/module-04%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Beginner%20%E2%86%92%20Intermediate-yellow) ![git 2.43+](https://img.shields.io/badge/git-2.43%2B-F05032?logo=git&logoColor=white) ![GitHub · GitLab · Gitea](https://img.shields.io/badge/platforms-GitHub%20%C2%B7%20GitLab%20%C2%B7%20Gitea-orange)
+
 ---
 
 ## Table of Contents

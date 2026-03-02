@@ -4,6 +4,8 @@
 > **Audience**: Beginner → Intermediate  
 > **Prerequisites**: Module 06 (Kubernetes), Module 11 (Monitoring & Observability)
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 12 of 15](https://img.shields.io/badge/module-12%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate-orange) ![Elasticsearch 8.16+](https://img.shields.io/badge/Elasticsearch-8.16%2B-005571?logo=elasticsearch&logoColor=white) ![Kibana 8.16+](https://img.shields.io/badge/Kibana-8.16%2B-005571?logo=kibana&logoColor=white) ![Loki 3.3+](https://img.shields.io/badge/Loki-3.3%2B-F5A623) ![ELK · Loki stack](https://img.shields.io/badge/stack-ELK%20%C2%B7%20Loki-005571)
+
 ---
 
 ## Table of Contents

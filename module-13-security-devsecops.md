@@ -4,6 +4,8 @@
 > **Audience**: Beginner → Intermediate  
 > **Prerequisites**: Module 05 (Containers), Module 06 (Kubernetes), Module 08 (IaC)
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 13 of 15](https://img.shields.io/badge/module-13%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Advanced-red) ![Trivy 0.58+](https://img.shields.io/badge/Trivy-0.58%2B-1904DA) ![Vault 1.18+](https://img.shields.io/badge/Vault-1.18%2B-FFCF25?logo=vault&logoColor=black) ![Falco 0.39+](https://img.shields.io/badge/Falco-0.39%2B-00ADEF) ![Container · Runtime · Secrets](https://img.shields.io/badge/scope-Container%20%C2%B7%20Runtime%20%C2%B7%20Secrets-grey)
+
 ---
 
 ## Table of Contents

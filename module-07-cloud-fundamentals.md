@@ -2,6 +2,8 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 07 of 15](https://img.shields.io/badge/module-07%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate-orange) ![AWS CLI 2.15+](https://img.shields.io/badge/AWS%20CLI-2.15%2B-FF9900?logo=amazonaws&logoColor=white) ![Azure CLI 2.65+](https://img.shields.io/badge/Azure%20CLI-2.65%2B-0078D4?logo=microsoftazure&logoColor=white) ![gcloud SDK](https://img.shields.io/badge/gcloud%20SDK-latest-4285F4?logo=googlecloud&logoColor=white) ![AWS · Azure · GCP](https://img.shields.io/badge/cloud-AWS%20%C2%B7%20Azure%20%C2%B7%20GCP-232F3E)
+
 ---
 
 ## Table of Contents

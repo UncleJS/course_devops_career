@@ -2,6 +2,8 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 06 of 15](https://img.shields.io/badge/module-06%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate%20%E2%86%92%20Advanced-red) ![Kubernetes v1.31+](https://img.shields.io/badge/Kubernetes-v1.31%2B-326CE5?logo=kubernetes&logoColor=white) ![kubectl 1.31+](https://img.shields.io/badge/kubectl-1.31%2B-326CE5?logo=kubernetes&logoColor=white) ![Helm 3.16+](https://img.shields.io/badge/Helm-3.16%2B-0F1689?logo=helm&logoColor=white) ![CRI-O · containerd](https://img.shields.io/badge/runtime-CRI--O%20%C2%B7%20containerd-grey)
+
 ---
 
 ## Table of Contents

@@ -20,6 +20,7 @@
 - [Intermediate: Workspaces](#intermediate-workspaces)
 - [Intermediate: Testing & Validation](#intermediate-testing--validation)
 - [Intermediate: Migrating from Terraform to OpenTofu](#intermediate-migrating-from-terraform-to-opentofu)
+- [Advanced: Remote State Backends & Terragrunt](#advanced-remote-state-backends--terragrunt)
 - [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
@@ -51,6 +52,8 @@ By the end of this module you will be able to:
 - Organize code into reusable modules
 - Work with multiple environments (dev/staging/prod)
 - Migrate from Terraform to OpenTofu
+- Configure remote state backends (S3, GCS, Azure Blob) with locking
+- Use Terragrunt to keep IaC DRY across many environments
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -70,7 +73,7 @@ By the end of this module you will be able to:
 ```hcl
 # This file defines the same infrastructure — repeatable, reviewable, version-controlled
 resource "aws_instance" "web" {
-  ami           = "ami-0c55b159cbfafe1f0"
+  ami           = "ami-0c55b159cbfafe1f0"  # Replace with a current AMI for your region — see: aws ec2 describe-images
   instance_type = "t3.micro"
   tags = {
     Name = "webserver"
@@ -658,6 +661,189 @@ tofu providers lock
 | `.terraform.lock.hcl` | Re-generate with `tofu providers lock` |
 | Modules | 100% compatible |
 | New OpenTofu features | Some features (like `tofu test`) have OpenTofu-specific syntax |
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Advanced: Remote State Backends & Terragrunt
+
+### Remote State Backends
+
+By default, Terraform/OpenTofu stores state in a local `terraform.tfstate` file. In a team environment this is dangerous — two engineers running `apply` simultaneously can corrupt state. Remote backends solve this with **shared storage + state locking**.
+
+#### AWS S3 + DynamoDB (most common)
+
+```hcl
+# backend.tf
+terraform {
+  backend "s3" {
+    bucket         = "my-terraform-state"
+    key            = "prod/web/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "terraform-locks"    # For state locking
+    encrypt        = true
+  }
+}
+```
+
+```bash
+# Create the S3 bucket and DynamoDB table (one-time setup)
+aws s3api create-bucket --bucket my-terraform-state --region us-east-1
+aws s3api put-bucket-versioning --bucket my-terraform-state \
+  --versioning-configuration Status=Enabled
+
+aws dynamodb create-table \
+  --table-name terraform-locks \
+  --attribute-definitions AttributeName=LockID,AttributeType=S \
+  --key-schema AttributeName=LockID,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST
+```
+
+#### GCS (Google Cloud Storage)
+
+```hcl
+terraform {
+  backend "gcs" {
+    bucket = "my-terraform-state"
+    prefix = "prod/web"
+  }
+}
+```
+
+#### Azure Blob Storage
+
+```hcl
+terraform {
+  backend "azurerm" {
+    resource_group_name  = "tfstate-rg"
+    storage_account_name = "tfstateaccount"
+    container_name       = "tfstate"
+    key                  = "prod.terraform.tfstate"
+  }
+}
+```
+
+### Reading Remote State from Another Module
+
+```hcl
+# Reference outputs from a different state file (e.g., network module)
+data "terraform_remote_state" "network" {
+  backend = "s3"
+  config = {
+    bucket = "my-terraform-state"
+    key    = "prod/network/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
+resource "aws_instance" "app" {
+  ami           = "ami-abc123"
+  instance_type = "t3.micro"
+  subnet_id     = data.terraform_remote_state.network.outputs.private_subnet_id
+}
+```
+
+### Terragrunt — DRY Infrastructure at Scale
+
+As infrastructure grows, copy-pasting backend configurations and provider blocks across many modules becomes error-prone. **Terragrunt** is a thin wrapper that generates boilerplate and enforces DRY patterns.
+
+```
+(typical Terragrunt layout)
+infrastructure/
+├── terragrunt.hcl           ← root config (backend, provider defaults)
+├── prod/
+│   ├── terragrunt.hcl       ← env-level overrides
+│   ├── network/
+│   │   └── terragrunt.hcl   ← module instance
+│   └── web/
+│       └── terragrunt.hcl
+└── staging/
+    ├── terragrunt.hcl
+    ├── network/
+    │   └── terragrunt.hcl
+    └── web/
+        └── terragrunt.hcl
+```
+
+```hcl
+# infrastructure/terragrunt.hcl  (root)
+locals {
+  account_id = get_aws_account_id()
+  region     = "us-east-1"
+  env        = path_relative_to_include()
+}
+
+remote_state {
+  backend = "s3"
+  config = {
+    bucket         = "my-terraform-state-${local.account_id}"
+    key            = "${path_relative_to_include()}/terraform.tfstate"
+    region         = local.region
+    dynamodb_table = "terraform-locks"
+    encrypt        = true
+  }
+}
+
+generate "provider" {
+  path      = "provider.tf"
+  if_exists = "overwrite_terragrunt"
+  contents  = <<EOF
+provider "aws" {
+  region = "${local.region}"
+}
+EOF
+}
+```
+
+```hcl
+# infrastructure/prod/web/terragrunt.hcl
+include "root" {
+  path = find_in_parent_folders()
+}
+
+terraform {
+  source = "../../../modules/web-tier"
+}
+
+inputs = {
+  instance_type = "t3.medium"
+  min_size      = 3
+  max_size      = 10
+  environment   = "prod"
+}
+```
+
+```bash
+# Install Terragrunt
+brew install terragrunt          # macOS
+# or download from https://github.com/gruntwork-io/terragrunt/releases
+
+# Run against a single module
+terragrunt apply
+
+# Run against all modules in a directory tree (respects dependencies)
+terragrunt run-all apply
+
+# Plan everything in staging
+terragrunt run-all plan --terragrunt-working-dir infrastructure/staging
+```
+
+### Backend Migration
+
+Moving from local to remote state (or between backends):
+
+```bash
+# 1. Update backend block in backend.tf
+# 2. Re-initialize — Terraform will offer to copy existing state
+terraform init -migrate-state
+
+# Verify state was migrated correctly
+terraform state list
+
+# Remove local state file only after confirming remote is correct
+rm terraform.tfstate terraform.tfstate.backup
+```
 
 [↑ Back to TOC](#table-of-contents)
 

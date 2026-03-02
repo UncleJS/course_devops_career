@@ -404,7 +404,7 @@ FLUSH PRIVILEGES;
 
 # Get current binary log position (lock tables briefly)
 FLUSH TABLES WITH READ LOCK;
-SHOW MASTER STATUS;
+SHOW BINARY LOG STATUS;   -- MySQL 8.4+ / SHOW MASTER STATUS on older versions
 # Note: File and Position
 UNLOCK TABLES;
 ```
@@ -417,24 +417,25 @@ UNLOCK TABLES;
 server-id = 2
 relay_log = /var/log/mysql/mysql-relay-bin.log
 read_only = 1
-log_slave_updates = 1    # Allow replica to also be replicated to (chain)
+log_replica_updates = 1    # Allow replica to also be replicated to (chain)
+# Note: log_slave_updates is a deprecated alias removed in MySQL 9.0
 
-# Configure replication
-CHANGE MASTER TO
-    MASTER_HOST='192.168.1.30',
-    MASTER_USER='replicator',
-    MASTER_PASSWORD='ReplPassword123!',
-    MASTER_LOG_FILE='mysql-bin.000001',  # From SHOW MASTER STATUS
-    MASTER_LOG_POS=154;
+# Configure replication (MySQL 8.0.23+ syntax — CHANGE REPLICATION SOURCE TO)
+CHANGE REPLICATION SOURCE TO
+    SOURCE_HOST='192.168.1.30',
+    SOURCE_USER='replicator',
+    SOURCE_PASSWORD='ReplPassword123!',
+    SOURCE_LOG_FILE='mysql-bin.000001',  # From SHOW BINARY LOG STATUS
+    SOURCE_LOG_POS=154;
 
-START SLAVE;
+START REPLICA;
 
-# Check status
-SHOW SLAVE STATUS\G
+# Check status (MySQL 8.0.22+; use SHOW SLAVE STATUS\G on MySQL < 8.0.22)
+SHOW REPLICA STATUS\G
 # Look for:
-# Slave_IO_Running: Yes
-# Slave_SQL_Running: Yes
-# Seconds_Behind_Master: 0
+# Replica_IO_Running: Yes
+# Replica_SQL_Running: Yes
+# Seconds_Behind_Source: 0
 ```
 
 ### MariaDB Galera Cluster (Multi-Master)
@@ -974,7 +975,7 @@ spec:
 
 ## Step 1 — Validate the failure (5 min)
 1. Check database health: `mysql -h db-primary -u monitor -e "SELECT 1;"`
-2. Check replica status: `SHOW SLAVE STATUS\G`
+2. Check replica status: `SHOW REPLICA STATUS\G`
 3. Check HAProxy status: http://haproxy:8404/stats
 4. Check CloudWatch/Prometheus alerts
 
@@ -984,9 +985,9 @@ spec:
 
 ## Step 3 — Promote replica (10 min)
 ```sql
--- On replica server
-STOP SLAVE;
-RESET SLAVE ALL;
+-- On replica server (MySQL 8.0.22+ syntax)
+STOP REPLICA;
+RESET REPLICA ALL;
 SET GLOBAL read_only = 0;
 ```
 
@@ -1199,12 +1200,12 @@ systemctl status keepalived
 ip addr show eth0 | grep 192.168.1.100            # Check if VIP is local
 journalctl -u keepalived -f                       # Watch failover events
 
-# MySQL Replication
-SHOW MASTER STATUS\G
-SHOW SLAVE STATUS\G
-SHOW SLAVE HOSTS\G
-STOP SLAVE; START SLAVE;
-RESET SLAVE ALL;                                  # Remove replication config
+# MySQL Replication (MySQL 8.0.22+ syntax)
+SHOW BINARY LOG STATUS\G               # On primary (was: SHOW MASTER STATUS)
+SHOW REPLICA STATUS\G                  # On replica (was: SHOW SLAVE STATUS)
+SHOW REPLICAS\G                        # List replicas (was: SHOW SLAVE HOSTS)
+STOP REPLICA; START REPLICA;           # Control replica thread
+RESET REPLICA ALL;                     # Remove replication config
 
 # Galera
 SHOW STATUS LIKE 'wsrep_cluster_size';
@@ -1276,9 +1277,9 @@ docker run -d --name mysql-replica \
 # Follow the primary-replica setup steps from this module
 # Then:
 # 1. Insert data into primary
-# 2. Verify it appears on replica (SHOW SLAVE STATUS)
+# 2. Verify it appears on replica (SHOW REPLICA STATUS\G)
 # 3. Stop primary container
-# 4. Promote replica: STOP SLAVE; RESET SLAVE ALL; SET GLOBAL read_only=0;
+# 4. Promote replica: STOP REPLICA; RESET REPLICA ALL; SET GLOBAL read_only=0;
 # 5. Write to the (now primary) replica and verify
 ```
 
@@ -1362,4 +1363,4 @@ kubectl get namespace backup-test
 
 ---
 
-*© UncleJS — Licensed under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution.*
+*© 2026 UncleJS — Licensed under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution.*

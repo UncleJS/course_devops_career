@@ -35,9 +35,10 @@
 8. [Tool Comparison: Prometheus vs Zabbix vs Datadog](#tool-comparison-prometheus-vs-zabbix-vs-datadog)
 9. [Kubernetes Monitoring Stack](#kubernetes-monitoring-stack)
 10. [SLIs, SLOs, and Error Budgets](#slis-slos-and-error-budgets)
-11. [Tools & Commands Reference](#tools--commands-reference)
-12. [Hands-On Labs](#hands-on-labs)
-13. [Further Reading](#further-reading)
+11. [Advanced: Distributed Tracing with OpenTelemetry](#advanced-distributed-tracing-with-opentelemetry)
+12. [Tools & Commands Reference](#tools--commands-reference)
+13. [Hands-On Labs](#hands-on-labs)
+14. [Further Reading](#further-reading)
 
 ---
 
@@ -62,6 +63,7 @@ By the end of this module, you will be able to:
 - Use the Zabbix API to automate host registration
 - Design SLIs/SLOs and calculate error budgets
 - Choose the right monitoring tool for a given context
+- Instrument a service with OpenTelemetry and visualize distributed traces in Jaeger or Tempo
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -1428,9 +1430,211 @@ sum(rate(http_requests_total[30d]))
 
 ---
 
-## Tools & Commands Reference
+## Advanced: Distributed Tracing with OpenTelemetry
 
-### Prometheus
+Metrics tell you *something is slow*. Logs tell you *what happened*. **Distributed traces** tell you *where in the request chain the latency lives* — essential for microservices architectures.
+
+### The Three Pillars — Completing the Picture
+
+```
+Metrics  → "P99 latency on /checkout is 4s"
+Logs     → "ERROR: payment-service timed out at 2026-03-02T14:32:01Z"
+Traces   → checkout-api (12ms) → cart-service (8ms) → payment-service (3980ms) ← HERE
+```
+
+### OpenTelemetry (OTel)
+
+OpenTelemetry is the CNCF standard for generating, collecting, and exporting telemetry (traces, metrics, logs) — vendor-neutral and supported by every major observability backend.
+
+```
+Your App → OTel SDK → OTel Collector → Jaeger / Tempo / Datadog / Honeycomb
+```
+
+### Instrumenting a Node.js Service
+
+```bash
+npm install @opentelemetry/sdk-node \
+            @opentelemetry/auto-instrumentations-node \
+            @opentelemetry/exporter-trace-otlp-http
+```
+
+```javascript
+// tracing.js — load BEFORE app code
+const { NodeSDK } = require('@opentelemetry/sdk-node');
+const { getNodeAutoInstrumentations } = require('@opentelemetry/auto-instrumentations-node');
+const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-http');
+
+const sdk = new NodeSDK({
+  traceExporter: new OTLPTraceExporter({
+    url: 'http://otel-collector:4318/v1/traces',
+  }),
+  instrumentations: [getNodeAutoInstrumentations()],
+  serviceName: 'checkout-api',
+});
+
+sdk.start();
+```
+
+```bash
+# Start with tracing enabled
+node -r ./tracing.js app.js
+```
+
+### Instrumenting a Python (FastAPI) Service
+
+```bash
+pip install opentelemetry-sdk \
+            opentelemetry-instrumentation-fastapi \
+            opentelemetry-exporter-otlp
+```
+
+```python
+# tracing.py
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+provider = TracerProvider()
+provider.add_span_processor(
+    BatchSpanProcessor(OTLPSpanExporter(endpoint="http://otel-collector:4318/v1/traces"))
+)
+trace.set_tracer_provider(provider)
+
+# In your app:
+from fastapi import FastAPI
+app = FastAPI()
+FastAPIInstrumentor.instrument_app(app)
+```
+
+### Deploying the OTel Collector
+
+The Collector receives, processes, and exports telemetry — decoupling your apps from the backend:
+
+```yaml
+# otel-collector-config.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 1024
+
+  # Add service name as a resource attribute
+  resource:
+    attributes:
+      - key: environment
+        value: production
+        action: insert
+
+exporters:
+  jaeger:
+    endpoint: jaeger:14250
+    tls:
+      insecure: true
+
+  # Also export metrics to Prometheus
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+```
+
+```bash
+# Deploy collector + Jaeger with Docker Compose for local dev
+docker run -d --name otel-collector \
+  -p 4317:4317 -p 4318:4318 \
+  -v $(pwd)/otel-collector-config.yaml:/etc/otelcol/config.yaml \
+  otel/opentelemetry-collector:latest
+
+docker run -d --name jaeger \
+  -p 16686:16686 \    # Jaeger UI
+  -p 14250:14250 \    # gRPC from collector
+  jaegertracing/all-in-one:latest
+```
+
+### Deploying Grafana Tempo (Kubernetes-native traces backend)
+
+Tempo is the Grafana-native traces backend — pairs naturally with Prometheus + Loki:
+
+```bash
+helm repo add grafana https://grafana.github.io/helm-charts
+helm upgrade --install tempo grafana/tempo \
+  --namespace monitoring \
+  --set tempo.storage.trace.backend=local
+```
+
+**Configure Grafana data source for Tempo:**
+
+```yaml
+# grafana-datasource-tempo.yaml
+apiVersion: 1
+datasources:
+  - name: Tempo
+    type: tempo
+    url: http://tempo:3100
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki    # Link traces → logs automatically
+      serviceMap:
+        datasourceUid: prometheus
+```
+
+### Creating Custom Spans
+
+Auto-instrumentation captures HTTP/DB calls automatically. For business logic, add custom spans:
+
+```python
+from opentelemetry import trace
+
+tracer = trace.get_tracer(__name__)
+
+def process_payment(order_id: str, amount: float):
+    with tracer.start_as_current_span("process_payment") as span:
+        span.set_attribute("order.id", order_id)
+        span.set_attribute("payment.amount", amount)
+        span.set_attribute("payment.currency", "USD")
+
+        result = charge_card(amount)
+
+        if result.failed:
+            span.set_status(trace.StatusCode.ERROR, "Card declined")
+            span.record_exception(result.error)
+        return result
+```
+
+### Trace-Based Alerting
+
+Once traces flow into Tempo, you can alert on trace data in Grafana:
+
+```
+TraceQL query (Grafana 10+):
+{ .service.name = "payment-service" && duration > 2s } | rate()
+
+→ Alert: "Payment service P95 latency > 2s for 5 minutes"
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Tools & Commands Reference
 
 ```bash
 # Check config syntax
@@ -1687,4 +1891,4 @@ kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 909
 
 ---
 
-*© UncleJS — Licensed under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution.*
+*© 2026 UncleJS — Licensed under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution.*

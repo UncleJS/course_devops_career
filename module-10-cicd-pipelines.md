@@ -10,13 +10,15 @@
 - [Learning Objectives](#learning-objectives)
 - [Beginner: CI/CD Fundamentals](#beginner-cicd-fundamentals)
 - [Beginner: Deployment Strategies](#beginner-deployment-strategies)
-- [GitHub Actions](#github-actions)
-- [GitLab CI/CD](#gitlab-cicd)
-- [Jenkins](#jenkins)
+- [Beginner: Platform Comparison — GitHub Actions vs GitLab CI vs Jenkins](#beginner-platform-comparison--github-actions-vs-gitlab-ci-vs-jenkins)
+- [Intermediate: GitHub Actions](#intermediate-github-actions)
+- [Intermediate: GitLab CI/CD](#intermediate-gitlab-cicd)
+- [Intermediate: Jenkins](#intermediate-jenkins)
 - [Intermediate: Pipeline Design Patterns](#intermediate-pipeline-design-patterns)
 - [Intermediate: Secrets Management in Pipelines](#intermediate-secrets-management-in-pipelines)
 - [Intermediate: Artifact Management](#intermediate-artifact-management)
 - [Intermediate: CI/CD for Containers & Kubernetes](#intermediate-cicd-for-containers--kubernetes)
+- [Advanced: Reusable Workflows & DRY Pipelines](#advanced-reusable-workflows--dry-pipelines)
 - [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
@@ -45,6 +47,8 @@ By the end of this module you will be able to:
 - Store and use secrets securely in all three platforms
 - Build and push container images through a pipeline
 - Deploy to Kubernetes from a CI/CD pipeline
+- Design reusable, DRY pipelines using GitHub Actions reusable workflows and GitLab CI includes
+- Compare GitHub Actions, GitLab CI/CD, and Jenkins across key dimensions to choose the right tool
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -140,7 +144,43 @@ If stable: 100% → v1.1
 
 ---
 
-## GitHub Actions
+## Beginner: Platform Comparison — GitHub Actions vs GitLab CI vs Jenkins
+
+Before diving into each tool, here's a decision-oriented comparison to help you choose the right platform.
+
+| Dimension | GitHub Actions | GitLab CI/CD | Jenkins |
+|---|---|---|---|
+| **Hosting** | Cloud (GitHub-managed) | Cloud or self-hosted | Self-hosted only |
+| **Config file** | `.github/workflows/*.yml` | `.gitlab-ci.yml` | `Jenkinsfile` |
+| **Setup time** | Minutes (no install) | Minutes (no install) | Hours (server + plugins) |
+| **Runners** | GitHub-hosted or self-hosted | GitLab-hosted or self-hosted | Your own servers |
+| **Secrets management** | Repository/org secrets | CI/CD Variables (masked) | Credentials Store |
+| **Built-in registry** | GitHub Container Registry | GitLab Container Registry | No (plugin required) |
+| **Built-in SAST** | Via Marketplace actions | Native (GitLab Ultimate) | Via plugins |
+| **Pricing** | Free tier + pay-per-minute | Free tier + pay-per-minute | Free (infra costs only) |
+| **Best for** | GitHub-hosted projects | End-to-end GitLab DevSecOps | Enterprise / complex custom needs |
+
+### When to choose which
+
+```
+Is your code on GitHub?
+  └── YES → GitHub Actions (zero friction, massive Marketplace)
+
+Is your code on GitLab?
+  └── YES → GitLab CI/CD (native integration, free SAST/DAST)
+
+Do you need full on-premises control, custom agents, or complex enterprise integrations?
+  └── YES → Jenkins (most flexible, most work to maintain)
+
+Multi-cloud or platform-agnostic pipelines?
+  └── Consider a dedicated tool: Tekton, Argo Workflows, or Buildkite
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Intermediate: GitHub Actions
 
 GitHub Actions is built directly into GitHub. Workflows are YAML files stored in `.github/workflows/`.
 
@@ -317,7 +357,7 @@ jobs:
 
 ---
 
-## GitLab CI/CD
+## Intermediate: GitLab CI/CD
 
 GitLab CI/CD uses a `.gitlab-ci.yml` file at the repository root.
 
@@ -482,7 +522,7 @@ deploy-production:
 
 ---
 
-## Jenkins
+## Intermediate: Jenkins
 
 Jenkins is the battle-tested CI/CD workhorse — self-hosted, highly configurable, and found in virtually every enterprise. Pipelines are defined in a `Jenkinsfile`.
 
@@ -781,6 +821,228 @@ test:
 4. ArgoCD syncs the cluster to match the new manifest
 5. Deployment happens — zero manual kubectl commands
 ```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Advanced: Reusable Workflows & DRY Pipelines
+
+As your organization grows, you'll find yourself copy-pasting pipeline YAML across dozens of repositories. Reusable workflows (GitHub Actions) and CI includes (GitLab) solve this.
+
+### GitHub Actions: Reusable Workflows
+
+A reusable workflow lives in `.github/workflows/` and is called with `workflow_call`.
+
+```yaml
+# .github/workflows/_reusable-docker-build.yml  (in a central repo or the same repo)
+# Prefix with _ by convention to distinguish reusable from triggered workflows
+name: Reusable — Build & Push Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        required: true
+        type: string
+      registry:
+        required: false
+        type: string
+        default: ghcr.io
+    secrets:
+      REGISTRY_TOKEN:
+        required: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.REGISTRY_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ inputs.registry }}/${{ inputs.image-name }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+```
+
+**Calling the reusable workflow from any repo:**
+
+```yaml
+# .github/workflows/ci.yml  (in your application repo)
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    uses: my-org/devops-workflows/.github/workflows/_reusable-docker-build.yml@main
+    with:
+      image-name: ${{ github.repository }}
+    secrets:
+      REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+### GitHub Actions: Composite Actions
+
+For reusing individual *steps* (not full jobs), use a composite action:
+
+```yaml
+# .github/actions/setup-node-cache/action.yml
+name: Setup Node with cache
+description: Install Node and restore npm cache
+
+inputs:
+  node-version:
+    default: '20'
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+
+    - shell: bash
+      run: npm ci
+```
+
+```yaml
+# Usage in any workflow:
+steps:
+  - uses: actions/checkout@v4
+  - uses: ./.github/actions/setup-node-cache    # local composite action
+    with:
+      node-version: '20'
+  - run: npm test
+```
+
+### GitLab CI: YAML Includes
+
+GitLab's `include:` keyword is the equivalent — pull shared templates from a central project:
+
+```yaml
+# .gitlab-ci.yml  (application repo)
+include:
+  - project: 'my-org/cicd-templates'
+    ref: main
+    file:
+      - '/templates/docker-build.yml'
+      - '/templates/security-scan.yml'
+
+# Override variables without duplicating the job definition
+variables:
+  DOCKER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+
+stages:
+  - build
+  - scan
+  - deploy
+```
+
+```yaml
+# cicd-templates/templates/docker-build.yml  (central templates repo)
+.docker-build:
+  stage: build
+  image: docker:24
+  services:
+    - docker:24-dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $DOCKER_IMAGE .
+    - docker push $DOCKER_IMAGE
+  only:
+    - main
+
+docker-build:
+  extends: .docker-build
+```
+
+### Jenkins: Shared Libraries
+
+Jenkins calls its equivalent feature **Shared Libraries** — Groovy functions stored in a separate Git repo:
+
+```
+(shared-library repo)
+├── vars/
+│   ├── buildDockerImage.groovy
+│   ├── deployToKubernetes.groovy
+│   └── runSecurityScan.groovy
+└── src/
+    └── org/company/PipelineUtils.groovy
+```
+
+```groovy
+// vars/buildDockerImage.groovy
+def call(String imageName, String tag = env.BUILD_NUMBER) {
+    docker.withRegistry('https://registry.example.com', 'registry-creds') {
+        def img = docker.build("${imageName}:${tag}")
+        img.push()
+        img.push('latest')
+    }
+}
+```
+
+```groovy
+// Jenkinsfile  (any project)
+@Library('company-shared-library@main') _
+
+pipeline {
+    agent any
+    stages {
+        stage('Build Image') {
+            steps {
+                buildDockerImage('myapp', env.GIT_COMMIT.take(7))
+            }
+        }
+        stage('Deploy') {
+            steps {
+                deployToKubernetes(
+                    credentialsId: 'kubeconfig-staging',
+                    deployment: 'myapp',
+                    namespace: 'staging'
+                )
+            }
+        }
+    }
+}
+```
+
+### DRY Pipeline Principles
+
+| Principle | Applies to |
+|---|---|
+| **Single source of truth** for build/deploy logic | Shared library / reusable workflow / CI template |
+| **Inputs over hardcoding** — parameterize image names, namespaces, environments | All platforms |
+| **Version-pin your templates** (`@v2`, `ref: v1.3`) to avoid surprise breakage | All platforms |
+| **Test your pipeline templates** — treat them as production code | All platforms |
+| **Keep secrets out of templates** — always pass via caller's secrets | All platforms |
 
 [↑ Back to TOC](#table-of-contents)
 

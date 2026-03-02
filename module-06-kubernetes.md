@@ -19,6 +19,9 @@
 - [Intermediate: StatefulSets & DaemonSets](#intermediate-statefulsets--daemonsets)
 - [Intermediate: Helm — Kubernetes Package Manager](#intermediate-helm--kubernetes-package-manager)
 - [Intermediate: RBAC & Security](#intermediate-rbac--security)
+- [Advanced: Network Policies](#advanced-network-policies)
+- [Advanced: Pod Security Standards](#advanced-pod-security-standards)
+- [Advanced: Kustomize — Environment Overlays](#advanced-kustomize--environment-overlays)
 - [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
@@ -53,6 +56,9 @@ By the end of this module you will be able to:
 - Set resource requests/limits and configure Horizontal Pod Autoscaler
 - Use Helm to install and manage applications
 - Apply RBAC to control access to cluster resources
+- Write NetworkPolicy manifests to restrict pod-to-pod traffic
+- Apply Pod Security Standards (Baseline / Restricted) to namespaces
+- Use Kustomize to manage environment-specific overlays (staging vs production)
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -1024,6 +1030,342 @@ kubectl auth can-i create deployments
 
 ---
 
+## Advanced: Network Policies
+
+By default, every pod in Kubernetes can talk to every other pod — across namespaces. **NetworkPolicy** resources let you restrict traffic at the pod level, acting as a firewall inside the cluster.
+
+> **Note:** NetworkPolicy requires a CNI plugin that supports it (Calico, Cilium, WeaveNet). The default `kubenet` in minikube does not enforce policies unless you enable Calico: `minikube start --cni=calico`.
+
+### Default-deny all ingress
+
+The safest starting point: deny all inbound traffic to a namespace, then explicitly allow what is needed.
+
+```yaml
+# default-deny-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: production
+spec:
+  podSelector: {}          # Matches ALL pods in the namespace
+  policyTypes:
+    - Ingress
+```
+
+### Allow frontend → API only
+
+```yaml
+# allow-frontend-to-api.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-frontend-to-api
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: api             # Policy applies to pods labelled app=api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: frontend   # Only allow pods labelled app=frontend
+      ports:
+        - protocol: TCP
+          port: 3000
+```
+
+### Allow API → database; block frontend → database
+
+```yaml
+# allow-api-to-db.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-to-db
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: database
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api       # Only the API tier can reach the database
+      ports:
+        - protocol: TCP
+          port: 5432
+```
+
+### Allow cross-namespace (monitoring → app)
+
+```yaml
+# allow-monitoring.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-prometheus-scrape
+  namespace: production
+spec:
+  podSelector:
+    matchLabels:
+      app: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+```
+
+### Test your policies
+
+```bash
+# Verify policy is applied
+kubectl get networkpolicy -n production
+
+# Test connectivity from a debug pod
+kubectl run test --image=curlimages/curl -n production --rm -it -- \
+  curl http://api-svc:3000/health          # Should succeed
+
+kubectl run test --image=curlimages/curl -n production --rm -it -- \
+  curl http://database-svc:5432            # Should time out (blocked)
+
+# Check Cilium policy (if using Cilium CNI)
+kubectl exec -n kube-system cilium-xxxxx -- cilium policy get
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Advanced: Pod Security Standards
+
+Pod Security Policies (PSP) were **removed in Kubernetes 1.25**. Their replacement is **Pod Security Admission (PSA)** with three built-in standards:
+
+| Standard | Description | Typical Use |
+|---|---|---|
+| **Privileged** | No restrictions | System/infrastructure namespaces |
+| **Baseline** | Prevents known privilege escalations | General workloads |
+| **Restricted** | Hardened; follows security best practices | Security-sensitive workloads |
+
+### Enable via namespace labels
+
+```bash
+# Label a namespace to enforce the Restricted standard
+kubectl label namespace production \
+  pod-security.kubernetes.io/enforce=restricted \
+  pod-security.kubernetes.io/enforce-version=latest \
+  pod-security.kubernetes.io/warn=restricted \
+  pod-security.kubernetes.io/audit=restricted
+```
+
+| Label suffix | Effect |
+|---|---|
+| `enforce` | Pods violating the policy are **rejected** |
+| `warn` | Violations trigger a **warning** but pod is admitted |
+| `audit` | Violations are **logged** but pod is admitted |
+
+### What the Restricted standard requires
+
+```yaml
+# A pod that passes Restricted standard
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-pod
+  namespace: production
+spec:
+  securityContext:
+    runAsNonRoot: true          # Must not run as root
+    seccompProfile:
+      type: RuntimeDefault      # Must have seccomp profile
+  containers:
+    - name: app
+      image: myapp:1.0
+      securityContext:
+        allowPrivilegeEscalation: false   # Required
+        readOnlyRootFilesystem: true      # Recommended
+        capabilities:
+          drop:
+            - ALL                         # Drop all Linux capabilities
+      resources:
+        requests:
+          memory: "64Mi"
+          cpu: "250m"
+        limits:
+          memory: "128Mi"
+          cpu: "500m"
+```
+
+### Audit existing workloads before enforcing
+
+```bash
+# Dry-run: what would break if you enforced Restricted today?
+kubectl label namespace production \
+  pod-security.kubernetes.io/warn=restricted --overwrite
+
+# Check warnings in the output of your next apply
+kubectl apply -f k8s/
+
+# Or use the policy simulator
+kubectl -n production get pods -o json | \
+  kubectl-convert -f - --local -o json | \
+  kubectl apply --dry-run=server -f -
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Advanced: Kustomize — Environment Overlays
+
+**Kustomize** is a built-in Kubernetes tool (`kubectl apply -k`) for customizing manifests without templating. You write a base configuration once and layer environment-specific patches on top.
+
+### Project structure
+
+```
+k8s/
+├── base/
+│   ├── kustomization.yaml
+│   ├── deployment.yaml
+│   └── service.yaml
+└── overlays/
+    ├── staging/
+    │   └── kustomization.yaml   ← 1 replica, staging namespace
+    └── production/
+        └── kustomization.yaml   ← 3 replicas, resource limits
+```
+
+### Base kustomization
+
+```yaml
+# k8s/base/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - service.yaml
+```
+
+```yaml
+# k8s/base/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/myorg/api:latest
+          ports:
+            - containerPort: 3000
+```
+
+### Staging overlay
+
+```yaml
+# k8s/overlays/staging/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: staging
+
+resources:
+  - ../../base
+
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+    target:
+      kind: Deployment
+      name: api
+
+images:
+  - name: ghcr.io/myorg/api
+    newTag: staging-latest
+```
+
+### Production overlay
+
+```yaml
+# k8s/overlays/production/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: production
+
+resources:
+  - ../../base
+
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: "250m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
+    target:
+      kind: Deployment
+      name: api
+
+images:
+  - name: ghcr.io/myorg/api
+    newTag: "1.4.2"
+```
+
+### Apply with kubectl
+
+```bash
+# Preview what will be applied (renders YAML without applying)
+kubectl kustomize k8s/overlays/staging
+
+# Apply staging environment
+kubectl apply -k k8s/overlays/staging
+
+# Apply production environment
+kubectl apply -k k8s/overlays/production
+
+# Diff current cluster state vs kustomize output
+kubectl diff -k k8s/overlays/production
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
 ## Tools & Commands Reference
 
 | Command | Purpose |
@@ -1040,6 +1382,11 @@ kubectl auth can-i create deployments
 | `helm install` / `helm upgrade` | Install/upgrade charts |
 | `helm list` | List Helm releases |
 | `kubectl config use-context` | Switch clusters |
+| `kubectl get networkpolicy -n <ns>` | List NetworkPolicies in namespace |
+| `kubectl label namespace <ns> pod-security.kubernetes.io/enforce=restricted` | Apply Pod Security Standard |
+| `kubectl apply -k <overlay-path>` | Apply Kustomize overlay |
+| `kubectl kustomize <path>` | Preview rendered Kustomize output |
+| `kubectl diff -k <path>` | Diff cluster state vs Kustomize |
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -1072,7 +1419,11 @@ kubectl auth can-i create deployments
 
 1. Deploy a resource-limited application
 2. Create an HPA targeting 50% CPU
-3. Use a load generator to trigger scaling: `kubectl run load --image=busybox -- /bin/sh -c "while true; do wget -q -O- http://app-service; done"`
+3. Use a load generator to trigger scaling:
+   ```bash
+   kubectl run load --image=curlimages/curl -n default --rm -it -- \
+     /bin/sh -c "while true; do curl -s http://app-service.default.svc.cluster.local; sleep 0.1; done"
+   ```
 4. Watch the HPA scale up: `kubectl get hpa -w`
 5. Stop the load and watch scale down
 
@@ -1083,6 +1434,29 @@ kubectl auth can-i create deployments
 3. Customize values with a custom `values.yaml`
 4. Upgrade the release with a changed replica count
 
+### Lab 6.6 — Network Policies
+
+1. Start Minikube with Calico CNI to enable NetworkPolicy enforcement:
+   ```bash
+   minikube start --cni=calico
+   ```
+2. Deploy two pods: `frontend` (label `app=frontend`) and `api` (label `app=api`)
+3. Verify they can talk to each other: `kubectl exec frontend -- curl http://api-svc:3000`
+4. Apply a default-deny NetworkPolicy to the namespace
+5. Verify `frontend` can no longer reach `api`
+6. Apply an allow policy permitting `frontend → api` on port 3000
+7. Verify connectivity is restored — and that a third pod without the `frontend` label is still blocked
+
+### Lab 6.7 — Kustomize Overlays
+
+1. Create the base + overlays directory structure from this module
+2. Write a base Deployment and Service for nginx
+3. Create a `staging` overlay with 1 replica and a `production` overlay with 3 replicas
+4. Preview both: `kubectl kustomize k8s/overlays/staging`
+5. Apply staging: `kubectl apply -k k8s/overlays/staging`
+6. Apply production: `kubectl apply -k k8s/overlays/production`
+7. Verify the replica count differs between namespaces: `kubectl get deployments -A`
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -1092,6 +1466,9 @@ kubectl auth can-i create deployments
 - [Kubernetes Official Docs](https://kubernetes.io/docs/)
 - [Kubernetes The Hard Way](https://github.com/kelseyhightower/kubernetes-the-hard-way)
 - [Helm Documentation](https://helm.sh/docs/)
+- [Kustomize Documentation](https://kubectl.docs.kubernetes.io/references/kustomize/)
+- [NetworkPolicy Editor (visual)](https://editor.networkpolicy.io/)
+- [Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/)
 - [CKA Exam Curriculum](https://github.com/cncf/curriculum)
 - [kubectl Cheat Sheet](https://kubernetes.io/docs/reference/kubectl/cheatsheet/)
 - [Glossary: Cluster](./glossary.md#c), [Namespace](./glossary.md#n), [Pod](./glossary.md#p), [Helm](./glossary.md#h), [RBAC](./glossary.md#r)

@@ -18,6 +18,10 @@
 - [Intermediate: Databases in the Cloud](#intermediate-databases-in-the-cloud)
 - [Intermediate: Cloud CLI Tools](#intermediate-cloud-cli-tools)
 - [Intermediate: Cloud Cost Management](#intermediate-cloud-cost-management)
+- [Advanced: Serverless & Functions as a Service](#advanced-serverless--functions-as-a-service)
+- [Advanced: Auto Scaling & High Availability Groups](#advanced-auto-scaling--high-availability-groups)
+- [Advanced: Advanced VPC Networking](#advanced-advanced-vpc-networking)
+- [Advanced: Container Registries](#advanced-container-registries)
 - [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
@@ -47,6 +51,10 @@ By the end of this module you will be able to:
 - Use cloud-managed databases
 - Use the CLI tools for AWS, Azure, and GCP
 - Estimate and optimize cloud costs
+- Deploy serverless functions with AWS Lambda, Azure Functions, and GCP Cloud Functions
+- Configure Auto Scaling Groups and managed instance groups for elastic compute
+- Design advanced VPC topologies with NAT gateways, VPC peering, and private endpoints
+- Set up and use cloud container registries (ECR, ACR, Artifact Registry)
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -135,7 +143,7 @@ By the end of this module you will be able to:
 ```bash
 # Launch an instance via AWS CLI
 aws ec2 run-instances \
-  --image-id ami-0c55b159cbfafe1f0 \
+  --image-id ami-0c55b159cbfafe1f0 \    # Replace with current AMI for your region — see: aws ec2 describe-images
   --instance-type t3.micro \
   --key-name my-keypair \
   --security-group-ids sg-12345678 \
@@ -163,7 +171,7 @@ az group create --name myRG --location eastus
 az vm create \
   --resource-group myRG \
   --name myVM \
-  --image Ubuntu2204 \
+  --image Ubuntu2404    # Ubuntu 24.04 LTS \
   --admin-username azureuser \
   --generate-ssh-keys \
   --size Standard_B1s
@@ -185,7 +193,7 @@ az vm delete --resource-group myRG --name myVM
 # Create a VM
 gcloud compute instances create webserver \
   --machine-type=e2-micro \
-  --image-family=ubuntu-2204-lts \
+  --image-family=ubuntu-2404-lts \    # Ubuntu 24.04 LTS
   --image-project=ubuntu-os-cloud \
   --zone=us-central1-a \
   --tags=http-server
@@ -293,8 +301,8 @@ IAM controls **who** can do **what** on **which resources**.
 
 | Concept | AWS | Azure | GCP |
 |---|---|---|---|
-| **User** | IAM User | Azure AD User | Google Account |
-| **Group** | IAM Group | Azure AD Group | Google Group |
+| **User** | IAM User | Microsoft Entra ID User | Google Account |
+| **Group** | IAM Group | Microsoft Entra ID Group | Google Group |
 | **Role** | IAM Role | Azure Role | IAM Role |
 | **Policy/Permission** | IAM Policy | Role Definition | IAM Binding |
 | **Service Identity** | IAM Role (for EC2) | Managed Identity | Service Account |
@@ -344,7 +352,7 @@ aws rds create-db-instance \
   --engine postgres \
   --engine-version 16.1 \
   --master-username admin \
-  --master-user-password SecurePass123! \
+  --master-user-password "${DB_PASSWORD}" \    # Never hardcode — use a secret or env var
   --allocated-storage 20 \
   --vpc-security-group-ids sg-12345 \
   --no-publicly-accessible
@@ -354,7 +362,7 @@ az postgres flexible-server create \
   --resource-group myRG \
   --name mypostgres \
   --admin-user admin \
-  --admin-password SecurePass123! \
+  --admin-password "${DB_PASSWORD}" \    # Never hardcode — use a secret or env var
   --sku-name Standard_B1ms \
   --tier Burstable
 
@@ -365,7 +373,7 @@ gcloud sql instances create mydb \
   --region=us-central1
 
 gcloud sql databases create appdb --instance=mydb
-gcloud sql users create admin --instance=mydb --password=SecurePass123!
+gcloud sql users create admin --instance=mydb --password="${DB_PASSWORD}"   # Never hardcode — use a secret or env var
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -473,6 +481,347 @@ gcloud billing accounts list
 
 ---
 
+## Advanced: Serverless & Functions as a Service
+
+Serverless (FaaS) lets you run code without provisioning or managing servers. You pay only for execution time — billed in milliseconds.
+
+### AWS Lambda
+
+```bash
+# Create a simple Lambda function (Python)
+cat > handler.py << 'EOF'
+import json
+
+def lambda_handler(event, context):
+    name = event.get("name", "World")
+    return {
+        "statusCode": 200,
+        "body": json.dumps({"message": f"Hello, {name}!"})
+    }
+EOF
+
+# Package it
+zip function.zip handler.py
+
+# Create the Lambda function
+aws lambda create-function \
+  --function-name hello-world \
+  --runtime python3.12 \
+  --role arn:aws:iam::123456789012:role/lambda-execution-role \
+  --handler handler.lambda_handler \
+  --zip-file fileb://function.zip
+
+# Invoke it
+aws lambda invoke \
+  --function-name hello-world \
+  --payload '{"name": "DevOps"}' \
+  --cli-binary-format raw-in-base64-out \
+  response.json
+cat response.json
+
+# Update function code
+zip function.zip handler.py
+aws lambda update-function-code \
+  --function-name hello-world \
+  --zip-file fileb://function.zip
+
+# Add an HTTP trigger (API Gateway)
+aws lambda add-permission \
+  --function-name hello-world \
+  --statement-id apigateway-invoke \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com
+```
+
+### Azure Functions
+
+```bash
+# Create a Function App
+az functionapp create \
+  --resource-group myRG \
+  --consumption-plan-location eastus \
+  --runtime python \
+  --runtime-version 3.11 \
+  --functions-version 4 \
+  --name my-function-app \
+  --storage-account mystorageaccount
+
+# Deploy from local project
+func azure functionapp publish my-function-app
+```
+
+### GCP Cloud Functions
+
+```bash
+# Deploy a Cloud Function
+cat > main.py << 'EOF'
+import functions_framework
+
+@functions_framework.http
+def hello(request):
+    name = request.args.get("name", "World")
+    return f"Hello, {name}!"
+EOF
+
+gcloud functions deploy hello \
+  --runtime python312 \
+  --trigger-http \
+  --allow-unauthenticated \
+  --region us-central1
+
+# Call it
+gcloud functions call hello --data '{"name": "DevOps"}' --region us-central1
+```
+
+### When to use serverless
+
+| Use case | Good fit? |
+|---|---|
+| Webhooks / event processing | ✅ Excellent |
+| Scheduled jobs / cron tasks | ✅ Good |
+| API backends with variable traffic | ✅ Good |
+| Long-running batch jobs (> 15 min) | ❌ Poor — use containers |
+| Stateful workloads | ❌ Poor — functions are stateless |
+| Low-latency requirements (cold start) | ⚠️ Provisioned concurrency helps |
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Advanced: Auto Scaling & High Availability Groups
+
+Auto Scaling automatically adjusts compute capacity based on demand — scaling out under load and scaling in when idle.
+
+### AWS Auto Scaling Groups (ASG)
+
+```bash
+# Create a launch template
+aws ec2 create-launch-template \
+  --launch-template-name web-lt \
+  --launch-template-data '{
+    "ImageId": "ami-0c55b159cbfafe1f0",
+    "InstanceType": "t3.micro",
+    "SecurityGroupIds": ["sg-12345678"],
+    "UserData": "IyEvYmluL2Jhc2gKYXB0LWdldCB1cGRhdGUKYXB0LWdldCBpbnN0YWxsIC15IG5naW54"
+  }'
+
+# Create an Auto Scaling Group
+aws autoscaling create-auto-scaling-group \
+  --auto-scaling-group-name web-asg \
+  --launch-template LaunchTemplateName=web-lt,Version='$Latest' \
+  --min-size 2 \
+  --max-size 10 \
+  --desired-capacity 2 \
+  --vpc-zone-identifier "subnet-abc123,subnet-def456" \
+  --health-check-type ELB \
+  --health-check-grace-period 300
+
+# Attach to a load balancer target group
+aws autoscaling attach-load-balancer-target-groups \
+  --auto-scaling-group-name web-asg \
+  --target-group-arns arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/my-tg/abc123
+
+# Create a scaling policy (target tracking — CPU at 60%)
+aws autoscaling put-scaling-policy \
+  --auto-scaling-group-name web-asg \
+  --policy-name cpu-target-tracking \
+  --policy-type TargetTrackingScaling \
+  --target-tracking-configuration '{
+    "PredefinedMetricSpecification": {
+      "PredefinedMetricType": "ASGAverageCPUUtilization"
+    },
+    "TargetValue": 60.0
+  }'
+
+# Manually scale
+aws autoscaling set-desired-capacity \
+  --auto-scaling-group-name web-asg \
+  --desired-capacity 5
+```
+
+### GCP Managed Instance Groups (MIG)
+
+```bash
+# Create an instance template
+gcloud compute instance-templates create web-template \
+  --machine-type=e2-micro \
+  --image-family=ubuntu-2404-lts \
+  --image-project=ubuntu-os-cloud \
+  --tags=http-server \
+  --metadata=startup-script='#!/bin/bash
+    apt-get update && apt-get install -y nginx'
+
+# Create a regional managed instance group with autoscaling
+gcloud compute instance-groups managed create web-mig \
+  --base-instance-name=web \
+  --template=web-template \
+  --size=2 \
+  --region=us-central1
+
+# Configure autoscaling
+gcloud compute instance-groups managed set-autoscaling web-mig \
+  --region=us-central1 \
+  --max-num-replicas=10 \
+  --min-num-replicas=2 \
+  --target-cpu-utilization=0.6 \
+  --cool-down-period=90
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Advanced: Advanced VPC Networking
+
+### NAT Gateway — outbound internet for private subnets
+
+Private subnets (where your app servers and databases live) have no direct internet access. A **NAT Gateway** in the public subnet allows outbound traffic while blocking inbound connections.
+
+```bash
+# AWS — create a NAT Gateway
+aws ec2 allocate-address --domain vpc   # Get an Elastic IP
+aws ec2 create-nat-gateway \
+  --subnet-id subnet-public-12345 \
+  --allocation-id eipalloc-12345678
+
+# Add a route in the private subnet's route table
+aws ec2 create-route \
+  --route-table-id rtb-private-12345 \
+  --destination-cidr-block 0.0.0.0/0 \
+  --nat-gateway-id nat-12345678abcdef0
+```
+
+```bash
+# GCP — Cloud NAT
+gcloud compute routers create my-router \
+  --network=my-vpc \
+  --region=us-central1
+
+gcloud compute routers nats create my-nat \
+  --router=my-router \
+  --region=us-central1 \
+  --auto-allocate-nat-external-ips \
+  --nat-all-subnet-ip-ranges
+```
+
+### VPC Peering — connect two VPCs
+
+VPC peering allows private IP communication between two VPCs — within the same account or across accounts.
+
+```bash
+# AWS — create a peering connection
+aws ec2 create-vpc-peering-connection \
+  --vpc-id vpc-aaaa1111 \
+  --peer-vpc-id vpc-bbbb2222
+
+# Accept the peering request (from the peer account/region if cross-account)
+aws ec2 accept-vpc-peering-connection \
+  --vpc-peering-connection-id pcx-12345678
+
+# Add routes in both VPCs
+aws ec2 create-route \
+  --route-table-id rtb-aaaa1111 \
+  --destination-cidr-block 10.1.0.0/16 \
+  --vpc-peering-connection-id pcx-12345678
+```
+
+### Private Endpoints — access AWS services without internet
+
+Without private endpoints, traffic to S3 or DynamoDB from your VPC traverses the public internet. **VPC Endpoints** (AWS) / **Private Service Connect** (GCP) keep traffic on the AWS backbone.
+
+```bash
+# AWS — Gateway endpoint for S3 (free)
+aws ec2 create-vpc-endpoint \
+  --vpc-id vpc-12345 \
+  --service-name com.amazonaws.us-east-1.s3 \
+  --route-table-ids rtb-12345
+
+# AWS — Interface endpoint for Secrets Manager (charged per hour)
+aws ec2 create-vpc-endpoint \
+  --vpc-id vpc-12345 \
+  --service-name com.amazonaws.us-east-1.secretsmanager \
+  --vpc-endpoint-type Interface \
+  --subnet-ids subnet-private-12345 \
+  --security-group-ids sg-12345
+```
+
+### Full production VPC topology
+
+```
+VPC: 10.0.0.0/16
+│
+├── AZ us-east-1a
+│   ├── Public subnet 10.0.1.0/24
+│   │   ├── Load Balancer (ALB)
+│   │   └── NAT Gateway + Elastic IP
+│   ├── Private subnet 10.0.11.0/24 (app servers)
+│   └── Database subnet 10.0.21.0/24 (RDS, ElastiCache)
+│
+└── AZ us-east-1b
+    ├── Public subnet 10.0.2.0/24
+    │   ├── Load Balancer (ALB)
+    │   └── NAT Gateway + Elastic IP
+    ├── Private subnet 10.0.12.0/24 (app servers)
+    └── Database subnet 10.0.22.0/24 (RDS Multi-AZ standby)
+
+Route tables:
+  Public subnets → Internet Gateway (0.0.0.0/0)
+  Private subnets → NAT Gateway in same AZ (0.0.0.0/0)
+  Database subnets → No internet route (isolated)
+
+VPC Endpoints:
+  S3 Gateway Endpoint → on private route tables
+  Secrets Manager Interface Endpoint → in private subnets
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Advanced: Container Registries
+
+Container registries store and distribute Docker/OCI images. Cloud providers offer managed registries tightly integrated with their compute services.
+
+```bash
+# AWS ECR — Elastic Container Registry
+# Create a repository
+aws ecr create-repository --repository-name myapp --region us-east-1
+
+# Authenticate Docker to ECR
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin \
+  123456789012.dkr.ecr.us-east-1.amazonaws.com
+
+# Tag and push an image
+docker tag myapp:latest 123456789012.dkr.ecr.us-east-1.amazonaws.com/myapp:latest
+docker push 123456789012.dkr.ecr.us-east-1.amazonaws.com/myapp:latest
+
+# Enable image scanning on push
+aws ecr put-image-scanning-configuration \
+  --repository-name myapp \
+  --image-scanning-configuration scanOnPush=true
+
+# Azure Container Registry (ACR)
+az acr create --resource-group myRG --name myregistry --sku Basic
+az acr login --name myregistry
+docker tag myapp:latest myregistry.azurecr.io/myapp:latest
+docker push myregistry.azurecr.io/myapp:latest
+
+# GCP Artifact Registry
+gcloud artifacts repositories create myrepo \
+  --repository-format=docker \
+  --location=us-central1
+
+gcloud auth configure-docker us-central1-docker.pkg.dev
+
+docker tag myapp:latest us-central1-docker.pkg.dev/my-project/myrepo/myapp:latest
+docker push us-central1-docker.pkg.dev/my-project/myrepo/myapp:latest
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
 ## Tools & Commands Reference
 
 | Tool | Command Example | Purpose |
@@ -485,6 +834,12 @@ gcloud billing accounts list
 | `aws configure` | — | Set up AWS credentials |
 | `az login` | — | Authenticate to Azure |
 | `gcloud init` | — | Initialize GCP CLI |
+| `aws lambda invoke` | `aws lambda invoke --function-name fn out.json` | Invoke a Lambda function |
+| `aws autoscaling` | `aws autoscaling describe-auto-scaling-groups` | Manage ASGs |
+| `aws ecr get-login-password` | — | Authenticate Docker to ECR |
+| `az acr login` | `az acr login --name myregistry` | Authenticate Docker to ACR |
+| `aws ec2 create-nat-gateway` | — | Create a NAT Gateway |
+| `aws ec2 create-vpc-peering-connection` | — | Peer two VPCs |
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -524,6 +879,23 @@ gcloud billing accounts list
 3. Create a database and a table
 4. Verify backup retention settings
 
+### Lab 7.5 — Serverless Function
+
+1. Write a simple HTTP function in Python or Node.js
+2. Deploy it using AWS Lambda (or Azure Functions / GCP Cloud Functions)
+3. Invoke it via the CLI and confirm the response
+4. Check the invocation logs in CloudWatch / Azure Monitor / Cloud Logging
+5. Delete the function and any associated resources
+
+### Lab 7.6 — Container Registry
+
+1. Build a simple Docker image locally: `docker build -t myapp:v1 .`
+2. Create a private repository on ECR, ACR, or Artifact Registry
+3. Authenticate your local Docker daemon to the registry
+4. Tag and push the image to the registry
+5. Pull the image from the registry on a VM to verify it works
+6. Enable vulnerability scanning and review the scan results
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -534,6 +906,9 @@ gcloud billing accounts list
 - [Azure Documentation](https://learn.microsoft.com/en-us/azure/)
 - [Google Cloud Documentation](https://cloud.google.com/docs)
 - [AWS Free Tier](https://aws.amazon.com/free/)
+- [AWS Lambda Developer Guide](https://docs.aws.amazon.com/lambda/latest/dg/)
+- [AWS Auto Scaling User Guide](https://docs.aws.amazon.com/autoscaling/ec2/userguide/)
+- [AWS VPC User Guide](https://docs.aws.amazon.com/vpc/latest/userguide/)
 - [A Cloud Guru / Linux Academy](https://acloudguru.com/)
 - [Glossary: Cloud Provider](./glossary.md#c), [IAM](./glossary.md#i), [VPC](./glossary.md#v), [IaaS](./glossary.md#i)
 - **Certifications**: AWS Cloud Practitioner, AWS DevOps Engineer, Azure Administrator AZ-104

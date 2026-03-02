@@ -28,9 +28,10 @@
 9. [Log Retention, Rotation & Compliance](#log-retention-rotation--compliance)
 10. [Centralized Logging Architecture Patterns](#centralized-logging-architecture-patterns)
 11. [Comparing Logging Stacks](#comparing-logging-stacks)
-12. [Tools & Commands Reference](#tools--commands-reference)
-13. [Hands-On Labs](#hands-on-labs)
-14. [Further Reading](#further-reading)
+12. [Advanced: Log-Based Alerting & Anomaly Detection](#advanced-log-based-alerting--anomaly-detection)
+13. [Tools & Commands Reference](#tools--commands-reference)
+14. [Hands-On Labs](#hands-on-labs)
+15. [Further Reading](#further-reading)
 
 ---
 
@@ -55,6 +56,8 @@ By the end of this module, you will be able to:
 - Implement Kubernetes-native logging patterns
 - Design log retention, rotation, and archival policies
 - Choose the right logging stack for a given use case
+- Configure log-based alerting in Elasticsearch (Watcher) and Loki (Grafana Alerting)
+- Detect anomalies in log streams using threshold rules and ML-based techniques
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -1333,6 +1336,181 @@ Kubernetes DaemonSet (Fluent Bit / Promtail)
 
 ---
 
+## Advanced: Log-Based Alerting & Anomaly Detection
+
+Collecting logs is only half the value. The other half is **acting on them automatically** — alerting on errors, detecting anomalies before users complain, and firing runbooks from log patterns.
+
+### Alerting in Grafana Loki
+
+Loki alerts use the same Grafana Alerting engine as Prometheus — configure rules with LogQL:
+
+```yaml
+# loki-rules.yaml — deployed as a ConfigMap in Kubernetes
+groups:
+  - name: application_alerts
+    rules:
+      # Alert on error rate
+      - alert: HighErrorRate
+        expr: |
+          sum(rate({app="checkout-api"} |= "ERROR" [5m])) by (pod)
+          /
+          sum(rate({app="checkout-api"} [5m])) by (pod)
+          > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate on {{ $labels.pod }}"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      # Alert on specific error pattern
+      - alert: DatabaseConnectionFailed
+        expr: |
+          count_over_time({app="checkout-api"} |= "connection refused" [2m]) > 5
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection failures detected"
+```
+
+```bash
+# Apply Loki rules
+kubectl create configmap loki-rules \
+  --from-file=loki-rules.yaml \
+  --namespace monitoring
+```
+
+### Alerting in Elasticsearch with Watcher
+
+Elasticsearch's Watcher (X-Pack) can alert on log patterns:
+
+```json
+// POST _watcher/watch/high-error-rate
+{
+  "trigger": {
+    "schedule": { "interval": "1m" }
+  },
+  "input": {
+    "search": {
+      "request": {
+        "indices": ["logs-*"],
+        "body": {
+          "query": {
+            "bool": {
+              "must": [
+                { "match": { "level": "ERROR" } },
+                { "range": { "@timestamp": { "gte": "now-5m" } } }
+              ]
+            }
+          },
+          "aggs": {
+            "error_count": { "value_count": { "field": "_id" } }
+          }
+        }
+      }
+    }
+  },
+  "condition": {
+    "compare": { "ctx.payload.aggregations.error_count.value": { "gte": 50 } }
+  },
+  "actions": {
+    "send_slack": {
+      "webhook": {
+        "scheme": "https",
+        "host": "hooks.slack.com",
+        "path": "/services/YOUR/WEBHOOK/TOKEN",
+        "method": "post",
+        "body": "{\"text\": \"🚨 High error rate: {{ctx.payload.aggregations.error_count.value}} errors in 5 minutes\"}"
+      }
+    }
+  }
+}
+```
+
+### Anomaly Detection with Elasticsearch ML
+
+Elasticsearch's Machine Learning (requires X-Pack license) can learn baselines and alert on deviations:
+
+```json
+// PUT _ml/anomaly_detectors/log-volume-anomaly
+{
+  "description": "Detect unusual drops or spikes in log volume per service",
+  "analysis_config": {
+    "bucket_span": "15m",
+    "detectors": [
+      {
+        "detector_description": "count of logs by service",
+        "function": "count",
+        "partition_field_name": "service.name"
+      }
+    ]
+  },
+  "data_description": {
+    "time_field": "@timestamp"
+  },
+  "datafeed_config": {
+    "indices": ["logs-*"],
+    "query": { "match_all": {} }
+  }
+}
+```
+
+A **sudden drop** in log volume often indicates a service silently died — more subtle than a spike in errors.
+
+### Pattern-Based Anomaly Detection with Loki (no ML required)
+
+For simpler anomaly detection, rate-of-change rules catch unusual behaviour without ML:
+
+```logql
+# Alert if log volume drops by >80% compared to the previous hour
+# (service stopped logging = service probably crashed)
+(
+  sum(rate({namespace="production"} [5m])) by (app)
+  /
+  sum(rate({namespace="production"} [5m] offset 1h)) by (app)
+) < 0.20
+```
+
+### Log-Driven Incident Response with Alertmanager
+
+Route log alerts to the right team based on labels:
+
+```yaml
+# alertmanager.yml
+route:
+  group_by: ['app', 'severity']
+  group_wait: 30s
+  receiver: default
+
+  routes:
+    - match:
+        severity: critical
+      receiver: pagerduty-oncall
+      continue: true
+
+    - match:
+        app: checkout-api
+      receiver: payments-team-slack
+
+receivers:
+  - name: pagerduty-oncall
+    pagerduty_configs:
+      - routing_key: "${PAGERDUTY_KEY}"
+        description: "{{ .CommonAnnotations.summary }}"
+
+  - name: payments-team-slack
+    slack_configs:
+      - api_url: "${SLACK_WEBHOOK_URL}"
+        channel: "#payments-alerts"
+        title: "{{ .CommonAnnotations.summary }}"
+        text: "{{ .CommonAnnotations.description }}"
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
 ## Tools & Commands Reference
 
 ### Elasticsearch
@@ -1538,4 +1716,4 @@ groups:
 
 ---
 
-*© UncleJS — Licensed under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution.*
+*© 2026 UncleJS — Licensed under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution.*

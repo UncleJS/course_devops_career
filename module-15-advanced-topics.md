@@ -25,11 +25,12 @@
 7. [Platform Engineering](#platform-engineering)
 8. [FinOps — Cloud Cost Management](#finops--cloud-cost-management)
 9. [AI & LLMs in DevOps](#ai--llms-in-devops)
-10. [Capstone Project](#capstone-project)
-11. [Career Paths & Certification Roadmap](#career-paths--certification-roadmap)
-12. [Tools & Commands Reference](#tools--commands-reference)
-13. [Hands-On Labs](#hands-on-labs)
-14. [Further Reading](#further-reading)
+10. [Advanced: Chaos Engineering](#advanced-chaos-engineering)
+11. [Capstone Project](#capstone-project)
+12. [Career Paths & Certification Roadmap](#career-paths--certification-roadmap)
+13. [Tools & Commands Reference](#tools--commands-reference)
+14. [Hands-On Labs](#hands-on-labs)
+15. [Further Reading](#further-reading)
 
 ---
 
@@ -53,6 +54,7 @@ By the end of this module, you will be able to:
 - Describe Platform Engineering and Internal Developer Platforms (IDPs)
 - Implement basic FinOps practices and right-size cloud resources
 - Complete the capstone project integrating all DevOps disciplines
+- Design and execute chaos experiments to validate system resilience
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -1254,6 +1256,189 @@ cat output.json | jq -r '.content[0].text'
 
 ---
 
+## Advanced: Chaos Engineering
+
+Chaos Engineering is the practice of deliberately injecting failures into a system to validate that it handles them gracefully. Netflix coined the discipline with **Chaos Monkey**; today the tooling has matured significantly.
+
+> "Chaos engineering is not about breaking things randomly. It is about controlled, hypothesis-driven experiments that prove — or disprove — your resilience assumptions."
+
+### The Chaos Engineering Cycle
+
+```
+1. Define the steady state
+   └── "Normally: P99 latency < 200ms, error rate < 0.1%"
+
+2. Form a hypothesis
+   └── "If one replica of payment-service crashes, the system auto-recovers within 30s"
+
+3. Run a controlled experiment
+   └── Kill one pod, kill a network link, inject latency
+
+4. Observe — did the system meet the steady state?
+   └── Check dashboards, alerts, SLOs
+
+5. Fix weaknesses found
+   └── Add retry logic, circuit breakers, more replicas
+
+6. Graduate to production (GameDay)
+   └── Run experiments during business hours with on-call team ready
+```
+
+### Chaos Mesh — Kubernetes-Native Chaos
+
+Chaos Mesh is a CNCF project that injects faults directly into Kubernetes using CRDs:
+
+```bash
+# Install Chaos Mesh
+helm repo add chaos-mesh https://charts.chaos-mesh.org
+helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
+  --namespace chaos-mesh \
+  --create-namespace \
+  --set chaosDaemon.runtime=containerd \
+  --set chaosDaemon.socketPath=/run/containerd/containerd.sock
+```
+
+**Kill a random pod (PodChaos):**
+
+```yaml
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: kill-payment-service-pod
+  namespace: production
+spec:
+  action: pod-kill
+  mode: one          # Kill one pod at random
+  selector:
+    namespaces: [production]
+    labelSelectors:
+      app: payment-service
+  duration: 30s      # Experiment runs for 30 seconds
+```
+
+**Inject network latency (NetworkChaos):**
+
+```yaml
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: slow-database-network
+  namespace: production
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: [production]
+    labelSelectors:
+      app: postgres
+  delay:
+    latency: "200ms"
+    correlation: "100"
+    jitter: "50ms"
+  duration: 2m
+  direction: to
+```
+
+**Exhaust CPU (StressChaos):**
+
+```yaml
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cpu-stress-checkout
+  namespace: production
+spec:
+  mode: one
+  selector:
+    namespaces: [production]
+    labelSelectors:
+      app: checkout-api
+  stressors:
+    cpu:
+      workers: 4
+      load: 80      # 80% CPU load
+  duration: 5m
+```
+
+### Litmus Chaos — Workflow-Based Experiments
+
+Litmus provides pre-built chaos experiments via **ChaosHub** and runs them as Kubernetes workflows:
+
+```bash
+# Install LitmusChaos
+kubectl apply -f https://litmuschaos.github.io/litmus/litmus-operator-v3.0.0.yaml
+
+# Browse experiments at https://hub.litmuschaos.io
+# Apply a pod-delete experiment
+kubectl apply -f https://hub.litmuschaos.io/api/chaos/3.0.0?file=charts/generic/pod-delete/experiment.yaml
+```
+
+### Chaos Experiment in CI/CD (Scheduled GameDay)
+
+```yaml
+# .github/workflows/chaos-gameday.yml
+name: Weekly Chaos GameDay
+
+on:
+  schedule:
+    - cron: '0 14 * * 3'    # Every Wednesday at 14:00 UTC
+  workflow_dispatch:          # Also allow manual trigger
+
+jobs:
+  chaos-experiment:
+    runs-on: ubuntu-latest
+    environment: staging      # Requires manual approval before running
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          kubeconfig: ${{ secrets.KUBECONFIG_STAGING }}
+
+      - name: Capture steady state (before)
+        run: |
+          P99=$(kubectl exec -n monitoring deploy/prometheus -- \
+            promtool query instant \
+            'histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))' \
+            | jq -r '.data.result[0].value[1]')
+          echo "BASELINE_P99=$P99" >> $GITHUB_ENV
+
+      - name: Apply chaos experiment
+        run: kubectl apply -f chaos/pod-kill-payment.yaml
+
+      - name: Wait and observe (90s)
+        run: sleep 90
+
+      - name: Validate steady state (after)
+        run: |
+          P99_AFTER=$(kubectl exec -n monitoring deploy/prometheus -- \
+            promtool query instant \
+            'histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))' \
+            | jq -r '.data.result[0].value[1]')
+          echo "P99 before: $BASELINE_P99 | P99 after: $P99_AFTER"
+          # Fail the workflow if latency degraded more than 2x
+          python3 -c "assert float('$P99_AFTER') < float('$BASELINE_P99') * 2.0, 'System did NOT recover within SLO'"
+
+      - name: Remove chaos experiment
+        if: always()
+        run: kubectl delete -f chaos/pod-kill-payment.yaml --ignore-not-found
+```
+
+### Chaos Engineering Maturity Model
+
+| Level | Description |
+|---|---|
+| **1 — Ad hoc** | Manual, unplanned experiments; no hypothesis; learning phase |
+| **2 — Hypotheses** | Structured experiments with a defined steady state |
+| **3 — Automated** | Chaos runs in CI/CD against staging; blocks release if SLO breached |
+| **4 — Production** | Controlled experiments in production during business hours |
+| **5 — Continuous** | Always-on chaos in production; auto-healed by platform |
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
 ## Capstone Project
 
 ### Project: Production-Grade Microservices Platform
@@ -1792,4 +1977,4 @@ You have completed the **DevOps Career Path** course. You now have the knowledge
 
 ---
 
-*© UncleJS — Licensed under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution.*
+*© 2026 UncleJS — Licensed under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution.*

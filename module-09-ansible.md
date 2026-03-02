@@ -20,6 +20,7 @@
 - [Intermediate: Ansible Vault — Encrypting Secrets](#intermediate-ansible-vault--encrypting-secrets)
 - [Intermediate: Error Handling & Idempotency](#intermediate-error-handling--idempotency)
 - [Intermediate: Dynamic Inventory](#intermediate-dynamic-inventory)
+- [Advanced: AWX & Ansible Automation Platform](#advanced-awx--ansible-automation-platform)
 - [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
@@ -50,6 +51,7 @@ By the end of this module you will be able to:
 - Encrypt sensitive data with Ansible Vault
 - Write idempotent playbooks that are safe to re-run
 - Use dynamic inventory for cloud environments
+- Install and navigate AWX/Ansible Automation Platform for team-scale automation
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -724,6 +726,135 @@ hostnames:
 # Use it
 ansible-inventory -i inventory/aws_ec2.yml --list
 ansible -i inventory/aws_ec2.yml role_web -m ping
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Advanced: AWX & Ansible Automation Platform
+
+The command-line is fine for a single engineer, but teams need **role-based access control, audit logs, scheduling, credentials vaulting, and a GUI**. **AWX** is the open-source upstream for **Red Hat Ansible Automation Platform (AAP)**.
+
+### AWX vs Ansible Automation Platform
+
+| Feature | AWX | Ansible Automation Platform |
+|---|---|---|
+| **License** | Open source (Apache 2.0) | Red Hat subscription |
+| **Support** | Community | Red Hat SLA |
+| **Execution environments** | Yes | Yes (enhanced) |
+| **Best for** | Self-hosted, open-source shops | Enterprise, regulated environments |
+
+### Installing AWX on Kubernetes
+
+```bash
+# Install AWX Operator (manages AWX lifecycle as a K8s CR)
+kubectl apply -k "https://github.com/ansible/awx-operator/config/default?ref=2.19.1"
+
+# Create the AWX instance
+cat <<'EOF' | kubectl apply -f -
+apiVersion: awx.ansible.com/v1beta1
+kind: AWX
+metadata:
+  name: awx
+  namespace: awx
+spec:
+  service_type: nodeport
+  nodeport_port: 30080
+EOF
+
+# Watch the operator deploy AWX (takes 5–10 minutes)
+kubectl get pods -n awx -w
+
+# Retrieve the auto-generated admin password
+kubectl get secret awx-admin-password -n awx \
+  -o jsonpath='{.data.password}' | base64 -d && echo
+```
+
+Access AWX at `http://<node-ip>:30080` with `admin` / `<retrieved password>`.
+
+### Key AWX Concepts
+
+| Concept | Description |
+|---|---|
+| **Organization** | Top-level namespace — groups users, inventories, projects |
+| **Project** | A Git repository containing playbooks |
+| **Inventory** | Hosts/groups — can sync from a Git file or cloud provider |
+| **Credentials** | Encrypted SSH keys, vault passwords, cloud tokens |
+| **Job Template** | A saved "run this playbook against this inventory" configuration |
+| **Workflow Template** | Chain multiple Job Templates with success/failure branching |
+| **Schedule** | Cron-style trigger for Job Templates |
+
+### Connecting a Git Project
+
+```
+1. Add Credentials → Source Control → SSH or HTTPS token for your Git host
+2. Create a Project → point to your playbook repo URL + branch
+3. AWX will sync (git clone) the project on demand or on schedule
+4. Create an Inventory → Source: "Sourced from a Project" → point to your inventory file in the repo
+5. Create a Job Template → Project + Playbook + Inventory + Credentials → Save
+6. Launch → AWX runs the playbook, streams output live, stores audit log
+```
+
+### AWX REST API & CLI
+
+AWX exposes a full REST API — useful for triggering pipelines from CI/CD:
+
+```bash
+# Install the AWX CLI
+pip install awxkit
+
+# Configure connection
+awx login --conf.host https://awx.example.com \
+          --conf.username admin \
+          --conf.password "${AWX_PASSWORD}"
+
+# List job templates
+awx job_templates list --all
+
+# Launch a job template by ID
+awx job_templates launch 42 \
+  --extra_vars '{"target_env": "staging"}' \
+  --monitor    # Stream output and block until complete
+```
+
+**Triggering AWX from GitHub Actions:**
+
+```yaml
+- name: Trigger Ansible playbook via AWX
+  run: |
+    curl -s -X POST \
+      -H "Authorization: Bearer ${AWX_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d '{"extra_vars": {"image_tag": "${{ github.sha }}"}}' \
+      https://awx.example.com/api/v2/job_templates/42/launch/
+```
+
+### Execution Environments
+
+AWX 19+ uses **Execution Environments** — container images that bundle Ansible, collections, and Python dependencies. This eliminates "works on my machine" problems:
+
+```bash
+# Build a custom EE with ansible-builder
+pip install ansible-builder
+
+cat > execution-environment.yml <<'EOF'
+version: 3
+images:
+  base_image:
+    name: quay.io/ansible/awx-ee:latest
+dependencies:
+  galaxy:
+    collections:
+      - name: amazon.aws
+        version: ">=6.0.0"
+      - name: community.postgresql
+  python:
+    - boto3>=1.28
+    - psycopg2-binary
+EOF
+
+ansible-builder build -t my-company/custom-ee:1.0 --prune-images
 ```
 
 [↑ Back to TOC](#table-of-contents)

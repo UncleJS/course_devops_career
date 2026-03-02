@@ -23,9 +23,10 @@
 13. [Cloud Security Fundamentals](#cloud-security-fundamentals)
 14. [Security in CI/CD Pipelines](#security-in-cicd-pipelines)
 15. [Compliance & Audit Frameworks](#compliance--audit-frameworks)
-16. [Tools & Commands Reference](#tools--commands-reference)
-17. [Hands-On Labs](#hands-on-labs)
-18. [Further Reading](#further-reading)
+16. [Runtime Security with Falco](#runtime-security-with-falco)
+17. [Tools & Commands Reference](#tools--commands-reference)
+18. [Hands-On Labs](#hands-on-labs)
+19. [Further Reading](#further-reading)
 
 ---
 
@@ -51,6 +52,7 @@ By the end of this module, you will be able to:
 - Apply Kubernetes NetworkPolicies for micro-segmentation
 - Describe the cloud shared responsibility model
 - Design a security scanning pipeline from commit to deploy
+- Install and configure Falco for runtime threat detection in Kubernetes
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -1406,6 +1408,127 @@ helm install falco falcosecurity/falco \
 
 ---
 
+## Runtime Security with Falco
+
+SAST, DAST, and image scanning are all **pre-runtime** checks. They cannot catch what happens after a container starts — a process spawning a shell, an unexpected outbound connection, or a file in `/etc` being modified. **Falco** fills this gap by monitoring kernel system calls at runtime and alerting on anomalous behaviour.
+
+### What Falco detects
+
+| Category | Example rule |
+|---|---|
+| **Privilege escalation** | Container running as root when it shouldn't |
+| **Shell spawned in container** | `bash` or `sh` started in a running container |
+| **Filesystem tampering** | Write to `/etc`, `/usr`, or `/bin` in a running container |
+| **Sensitive file read** | `/etc/shadow`, `/etc/kubernetes/admin.conf` accessed |
+| **Outbound network connection** | Unexpected connection to an external IP |
+| **Crypto mining signals** | High CPU + network + specific binary patterns |
+
+### Install Falco on Kubernetes (Helm)
+
+```bash
+# Add the Falco Helm repository
+helm repo add falcosecurity https://falcosecurity.github.io/charts
+helm repo update
+
+# Install Falco as a DaemonSet (runs on every node)
+helm install falco falcosecurity/falco \
+  --namespace falco \
+  --create-namespace \
+  --set tty=true \
+  --set falcosidekick.enabled=true \
+  --set falcosidekick.webui.enabled=true
+
+# Verify Falco pods are running on all nodes
+kubectl get pods -n falco -o wide
+
+# Check Falco is detecting events
+kubectl logs -n falco -l app.kubernetes.io/name=falco --tail=50
+```
+
+### Understanding Falco rules
+
+Falco rules are written in YAML and describe syscall patterns to watch for:
+
+```yaml
+# /etc/falco/falco_rules.yaml (excerpt — this is built-in)
+- rule: Terminal shell in container
+  desc: A shell was used as the entrypoint or is running inside a container
+  condition: >
+    spawned_process
+    and container
+    and shell_procs
+    and proc.tty != 0
+    and not container_entrypoint
+  output: >
+    A shell was spawned in a container with an attached terminal
+    (user=%user.name %container.info shell=%proc.name parent=%proc.pname
+    cmdline=%proc.cmdline)
+  priority: NOTICE
+  tags: [container, shell, mitre_execution]
+```
+
+### Write a custom Falco rule
+
+```yaml
+# custom-rules.yaml — alert on any write to /etc inside a container
+- rule: Write to sensitive directory in container
+  desc: Detect any file write to /etc inside a running container
+  condition: >
+    open_write
+    and container
+    and fd.directory startswith /etc
+    and not proc.name in (package_mgmt_binaries)
+  output: >
+    Sensitive directory write in container
+    (user=%user.name command=%proc.cmdline file=%fd.name container=%container.name image=%container.image.repository)
+  priority: WARNING
+  tags: [container, filesystem]
+```
+
+```bash
+# Apply a custom rules file
+helm upgrade falco falcosecurity/falco \
+  --namespace falco \
+  --set-file falco.rulesFile[0]=/path/to/custom-rules.yaml
+```
+
+### Route Falco alerts to Slack
+
+Falco has a companion tool called **Falcosidekick** that routes alerts to Slack, PagerDuty, Elasticsearch, and more.
+
+```bash
+# Install with Slack output enabled
+helm upgrade falco falcosecurity/falco \
+  --namespace falco \
+  --set falcosidekick.enabled=true \
+  --set falcosidekick.config.slack.webhookurl="https://hooks.slack.com/services/XXX/YYY/ZZZ" \
+  --set falcosidekick.config.slack.minimumpriority="warning"
+```
+
+### Trigger a test alert
+
+```bash
+# Manually trigger a Falco alert by spawning a shell in a container
+kubectl exec -it $(kubectl get pod -l app=api -o name | head -1) -- /bin/sh
+
+# In another terminal, watch Falco logs for the detection
+kubectl logs -n falco -l app.kubernetes.io/name=falco -f | grep "shell was spawned"
+```
+
+### Falco in the CI/CD pipeline (falco-event-generator)
+
+```bash
+# Run the Falco event generator to test your rules are working
+kubectl apply -f https://raw.githubusercontent.com/falcosecurity/event-generator/main/deployment/event-generator.yaml
+
+# It performs common attack patterns — Falco should fire alerts for all of them
+kubectl logs -n falco -l app.kubernetes.io/name=falco -f
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
 ## Tools & Commands Reference
 
 ```bash
@@ -1442,6 +1565,9 @@ cosign sign --key cosign.key registry.example.com/myapp:1.2.3
 cosign verify --key cosign.pub registry.example.com/myapp:1.2.3
 
 # Falco
+helm install falco falcosecurity/falco -n falco --create-namespace
+kubectl get pods -n falco -o wide
+kubectl logs -n falco -l app.kubernetes.io/name=falco --tail=50
 kubectl -n falco logs -l app.kubernetes.io/name=falco | grep WARNING
 ```
 
@@ -1602,6 +1728,8 @@ EOF
 - [Trivy Documentation](https://aquasecurity.github.io/trivy/)
 - [Semgrep Rules Registry](https://semgrep.dev/r)
 - [Falco Documentation](https://falco.org/docs/)
+- [Falcosidekick — Alert Routing](https://github.com/falcosecurity/falcosidekick)
+- [Falco Rules Hub](https://falco.org/docs/reference/rules/)
 - [CIS Benchmarks](https://www.cisecurity.org/cis-benchmarks/)
 - [NIST Cybersecurity Framework](https://www.nist.gov/cyberframework)
 - [Sigstore / Cosign](https://docs.sigstore.dev/cosign/overview/)
@@ -1611,4 +1739,4 @@ EOF
 
 ---
 
-*© UncleJS — Licensed under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution.*
+*© 2026 UncleJS — Licensed under [Creative Commons BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution.*

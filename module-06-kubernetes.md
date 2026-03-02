@@ -43,7 +43,11 @@ By the end of this module you will be able to:
 - Create and manage Pods, Deployments, and Services using YAML manifests
 - Use `kubectl` fluently for cluster management
 - Store configuration in ConfigMaps and sensitive data in Secrets
-- Configure Ingress to route external HTTP traffic
+- Explain the four Service types and when to use each one
+- Explain how kube-proxy implements Service routing (iptables vs IPVS modes)
+- Configure Ingress to route external HTTP/HTTPS traffic
+- Compare ingress-nginx, Traefik, and HAProxy Ingress controllers
+- Use the Gateway API (HTTPRoute, GatewayClass, Gateway) for next-generation routing
 - Set up persistent storage with PersistentVolumes and PersistentVolumeClaims
 - Configure liveness and readiness probes for self-healing
 - Set resource requests/limits and configure Horizontal Pod Autoscaler
@@ -359,49 +363,350 @@ data:
 
 ## Intermediate: Ingress & Load Balancing
 
-Ingress manages external HTTP/HTTPS access to services inside the cluster.
+Kubernetes has a layered approach to routing external traffic into the cluster. Understanding all the layers — kube-proxy, Services, Ingress controllers, and the emerging Gateway API — lets you design the right solution for each situation.
+
+### kube-proxy — How Services Work Under the Hood
+
+Every Kubernetes node runs `kube-proxy`, which programs the node's network rules to implement Service routing. When you create a Service, kube-proxy watches the API server and translates Service IPs + endpoints into actual packet forwarding rules.
+
+**Two kube-proxy modes:**
+
+| Feature | iptables mode | IPVS mode |
+|---|---|---|
+| Implementation | Linux iptables chains | Linux IPVS (kernel-level LB) |
+| Algorithm | Pseudo-random (not true round-robin) | Real round-robin, least-conn, etc. |
+| Scale | Degrades >1000 Services (linear rule scan) | Scales to 10,000+ Services (hash table) |
+| Performance | Lower overhead for small clusters | Higher throughput, lower latency at scale |
+| Debugging | `iptables -L -t nat` | `ipvsadm -L -n` |
+| Default | Yes (most clusters) | Opt-in (recommended for large clusters) |
+
+```bash
+# Check which mode kube-proxy is using
+kubectl -n kube-system get configmap kube-proxy -o yaml | grep mode
+
+# Enable IPVS mode (in kube-proxy ConfigMap)
+# mode: "ipvs"
+# ipvs:
+#   scheduler: "rr"   # round-robin, lc (least-conn), sh (src-hash), etc.
+
+# Inspect IPVS rules on a node
+ipvsadm -L -n
+ipvsadm -L -n --stats      # With connection statistics
+```
+
+### Services Deep-Dive
+
+A **Service** gives a stable IP and DNS name to a set of Pods (selected by label selector). There are four Service types, each with different reach and use case:
+
+| Type | Accessible From | How It Works |
+|---|---|---|
+| `ClusterIP` | Inside the cluster only | Virtual IP on cluster network; kube-proxy routes to pod IPs |
+| `NodePort` | Outside via any node IP + port | Opens a port (30000–32767) on every node |
+| `LoadBalancer` | Outside via cloud LB | Provisions a cloud load balancer (AWS ELB, GCP LB, etc.) |
+| `ExternalName` | Inside the cluster | CNAME alias to an external DNS name (no proxying) |
 
 ```yaml
-# ingress.yaml — requires an Ingress Controller (e.g., Nginx Ingress)
+# ClusterIP (default) — internal only
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-service
+spec:
+  type: ClusterIP
+  selector:
+    app: api
+  ports:
+    - port: 80           # Service port (what clients use)
+      targetPort: 3000   # Pod port (what the container listens on)
+---
+# NodePort — external via node IP
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-nodeport
+spec:
+  type: NodePort
+  selector:
+    app: api
+  ports:
+    - port: 80
+      targetPort: 3000
+      nodePort: 30080    # Optional: specify the port (default: random in 30000-32767)
+---
+# LoadBalancer — cloud load balancer
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-lb
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"  # AWS: use NLB
+spec:
+  type: LoadBalancer
+  selector:
+    app: api
+  ports:
+    - port: 443
+      targetPort: 3000
+```
+
+**Service DNS** — every Service gets a DNS name inside the cluster:
+
+```
+<service-name>.<namespace>.svc.cluster.local
+# Example: api-service.production.svc.cluster.local
+
+# Pods in the same namespace can use just the service name:
+curl http://api-service/
+# Cross-namespace:
+curl http://api-service.production/
+```
+
+**Headless Services** — set `clusterIP: None` to get DNS that returns all pod IPs directly (used by StatefulSets):
+
+```yaml
+spec:
+  clusterIP: None     # Headless — DNS returns individual pod IPs
+  selector:
+    app: db
+```
+
+### The Ingress Resource
+
+The `Ingress` resource is a Kubernetes-native way to declare HTTP/HTTPS routing rules. It's just configuration — an **Ingress Controller** reads these rules and implements them.
+
+```yaml
+# ingress.yaml — requires an Ingress Controller
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: app-ingress
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
+  ingressClassName: nginx     # Which controller handles this
   tls:
-  - hosts:
-    - app.example.com
-    secretName: app-tls
+    - hosts:
+        - app.example.com
+        - api.example.com
+      secretName: app-tls
   rules:
-  - host: app.example.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: nginx-service
-            port:
-              number: 80
-      - path: /api
-        pathType: Prefix
-        backend:
-          service:
-            name: api-service
-            port:
-              number: 8080
+    - host: app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80
+    - host: api.example.com
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: api-service
+                port:
+                  number: 8080
 ```
 
 ```bash
-# Install Nginx Ingress Controller
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
-
-# Check ingress
+# Check ingress status (EXTERNAL-IP shows the LB IP)
 kubectl get ingress
 kubectl describe ingress app-ingress
+
+# Get events (useful for debugging TLS issues)
+kubectl describe ingress app-ingress | grep -A5 Events
+```
+
+### Ingress Controllers Compared
+
+The Ingress resource is an abstraction — the controller does the actual work. You must install one.
+
+| Controller | Proxy | Best For | CNCF Status |
+|---|---|---|---|
+| **ingress-nginx** | Nginx | Default choice, massive ecosystem, battle-tested | Community |
+| **Traefik** | Traefik | Dynamic discovery, Docker-native teams, built-in Let's Encrypt | CNCF |
+| **HAProxy Ingress** | HAProxy | High-throughput, fine-grained LB, advanced ACLs | Community |
+| **AWS Load Balancer Controller** | AWS ALB/NLB | EKS native, integrates with AWS services | AWS |
+| **GKE Ingress** | Google Cloud LB | GKE native, global LB | Google |
+| **Kong** | Nginx + plugins | API gateway features, auth, rate limiting | CNCF |
+
+**ingress-nginx** — the most common choice:
+
+```bash
+# Install via Helm (recommended)
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm repo update
+
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+    --namespace ingress-nginx \
+    --create-namespace \
+    --set controller.replicaCount=2 \
+    --set controller.metrics.enabled=true \
+    --set controller.podAnnotations."prometheus\.io/scrape"=true
+
+# Get the external IP
+kubectl -n ingress-nginx get svc ingress-nginx-controller
+```
+
+**Traefik as Ingress Controller** (see Module 03 for full Traefik reference):
+
+```bash
+# Install via Helm
+helm repo add traefik https://traefik.github.io/charts
+helm install traefik traefik/traefik \
+    --namespace traefik \
+    --create-namespace \
+    --set deployment.replicas=2 \
+    --set ports.websecure.tls.enabled=true
+```
+
+**Key annotation differences between controllers:**
+
+```yaml
+# ingress-nginx annotations
+nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+nginx.ingress.kubernetes.io/rate-limit: "100"
+nginx.ingress.kubernetes.io/auth-url: "http://auth-service/verify"
+
+# Traefik annotations (when using standard Ingress resource)
+traefik.ingress.kubernetes.io/router.middlewares: default-redirect-https@kubernetescrd
+traefik.ingress.kubernetes.io/router.tls: "true"
+```
+
+### Gateway API — The Future of Kubernetes Ingress
+
+The **Gateway API** is the next-generation Kubernetes networking standard (beta in Kubernetes 1.28+). It addresses Ingress limitations by being more expressive, role-oriented, and portable across providers.
+
+**Why Ingress has limitations:**
+- Only handles HTTP/HTTPS (no TCP/UDP natively)
+- Annotations are controller-specific (breaks portability)
+- No role separation (cluster admin config mixed with app config)
+
+**Gateway API core resources:**
+
+| Resource | Who manages it | What it does |
+|---|---|---|
+| `GatewayClass` | Cluster admin | Defines the type of gateway (which controller) |
+| `Gateway` | Platform team | Defines listeners (ports, protocols, TLS) |
+| `HTTPRoute` | App team | Defines HTTP routing rules for a Gateway |
+| `TCPRoute` | App team | Defines TCP routing rules |
+| `GRPCRoute` | App team | Defines gRPC routing rules |
+
+```yaml
+# GatewayClass — cluster admin creates once
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: nginx
+spec:
+  controllerName: k8s.io/ingress-nginx
+---
+# Gateway — platform team configures listeners
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: prod-gateway
+  namespace: gateway-infra
+spec:
+  gatewayClassName: nginx
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: All     # Routes from any namespace can attach
+    - name: https
+      port: 443
+      protocol: HTTPS
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: wildcard-tls
+            namespace: gateway-infra
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+# HTTPRoute — app team configures routing (in app namespace)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: webapp-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: prod-gateway
+      namespace: gateway-infra
+      sectionName: https
+  hostnames:
+    - "app.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+      backendRefs:
+        - name: api-service
+          port: 8080
+          weight: 100
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: frontend-service
+          port: 80
+---
+# Traffic splitting for canary deployments
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: canary-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: prod-gateway
+      namespace: gateway-infra
+  hostnames:
+    - "app.example.com"
+  rules:
+    - backendRefs:
+        - name: webapp-stable
+          port: 80
+          weight: 90    # 90% to stable
+        - name: webapp-canary
+          port: 80
+          weight: 10    # 10% to canary
+```
+
+**Gateway API vs Ingress:**
+
+| Aspect | Ingress | Gateway API |
+|---|---|---|
+| Protocols | HTTP/HTTPS only | HTTP, HTTPS, TCP, UDP, gRPC |
+| Portability | Low (annotations are controller-specific) | High (standard spec across controllers) |
+| Role separation | None | GatewayClass (admin) / Gateway (platform) / Route (app) |
+| Traffic splitting | Via annotations | Native weights on backendRefs |
+| Header matching | Via annotations | Native match rules |
+| Status | Stable | Beta (v1 in Kubernetes 1.28+) |
+
+```bash
+# Install Gateway API CRDs
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
+
+# Check Gateway status
+kubectl get gateway -A
+kubectl describe gateway prod-gateway -n gateway-infra
+
+# Check HTTPRoute status (shows which gateway it's attached to)
+kubectl get httproute -A
 ```
 
 [↑ Back to TOC](#table-of-contents)

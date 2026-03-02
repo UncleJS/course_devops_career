@@ -17,10 +17,12 @@
 - [Beginner: Container Networking](#beginner-container-networking)
 - [Beginner: Volumes & Persistent Storage](#beginner-volumes--persistent-storage)
 - [Intermediate: Docker Compose & Podman Compose](#intermediate-docker-compose--podman-compose)
+- [Intermediate: Scaling Containers & Load Balancing](#intermediate-scaling-containers--load-balancing)
 - [Intermediate: Container Registries](#intermediate-container-registries)
 - [Intermediate: Podman Rootless & systemd Integration](#intermediate-podman-rootless--systemd-integration)
 - [Intermediate: Container Security](#intermediate-container-security)
 - [Intermediate: Image Optimization Best Practices](#intermediate-image-optimization-best-practices)
+- [Advanced: Podman in Production](#advanced-podman-in-production)
 - [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
@@ -47,8 +49,13 @@ By the end of this module you will be able to:
 - Configure container networking and persistent storage
 - Use Docker Compose and Podman Compose for multi-container applications
 - Push and pull images to/from container registries
-- Run Podman in rootless mode and integrate containers with systemd
-- Apply container security best practices
+- Explain Podman's rootless security model and user namespace remapping
+- Run Podman in rootless mode and manage containers as unprivileged services
+- Integrate Podman containers with systemd using both `podman generate systemd` and Quadlet unit files
+- Write `.container`, `.network`, and `.pod` Quadlet unit files for production deployments
+- Use `skopeo` to copy and inspect images across registries without pulling
+- Use `buildah` for low-level OCI image construction
+- Apply container security best practices including capability dropping and image scanning
 - Optimize images for size and build speed
 
 [↑ Back to TOC](#table-of-contents)
@@ -94,11 +101,12 @@ All containers share the **same host kernel** — this is why they're lightweigh
 |---|---|---|
 | Architecture | Client + daemon (`dockerd`) | Daemonless (fork/exec model) |
 | Root required | Yes (daemon runs as root) | No (rootless by default) |
-| systemd integration | Limited | Native (`podman generate systemd`) |
+| systemd integration | Limited | Native (Quadlet unit files) |
 | CLI compatibility | `docker` | `podman` (drop-in replacement) |
-| Compose support | `docker compose` | `podman-compose` |
+| Compose support | `docker compose` | `podman-compose` / `podman compose` |
 | Image format | OCI-compatible | OCI-compatible |
 | Pod support | No | Yes (like Kubernetes pods) |
+| Quadlet support | No | Yes (`.container` / `.network` / `.pod` units) |
 | Security posture | Root daemon = attack surface | Rootless = smaller attack surface |
 | Prevalence | Industry standard | Growing, default in RHEL/Fedora |
 
@@ -488,6 +496,215 @@ podman-compose logs -f
 
 ---
 
+## Intermediate: Scaling Containers & Load Balancing
+
+Running a single container is fine for development. In production, you need multiple instances for availability and throughput — and a load balancer in front of them.
+
+### Scaling with Docker Compose
+
+Docker Compose can run multiple replicas of a service using `--scale`. Traffic distribution requires removing fixed host port mappings and placing a load balancer in front.
+
+**Scalable `compose.yaml` (no fixed host port on the app):**
+
+```yaml
+version: "3.8"
+
+services:
+  web:
+    image: nginx:alpine
+    # No "ports:" here — the LB handles external traffic
+    networks:
+      - app-net
+
+  lb:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx-lb.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - app-net
+    depends_on:
+      - web
+
+networks:
+  app-net:
+```
+
+**`nginx-lb.conf` — Nginx as the load balancer:**
+
+```nginx
+events { worker_connections 1024; }
+
+http {
+    upstream web_backends {
+        least_conn;
+        server web_1:80;    # Docker Compose names: <service>_<replica-number>
+        server web_2:80;
+        server web_3:80;
+    }
+
+    server {
+        listen 80;
+        location / {
+            proxy_pass http://web_backends;
+            proxy_set_header Host              $host;
+            proxy_set_header X-Real-IP         $remote_addr;
+            proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        }
+    }
+}
+```
+
+**Scale up and down:**
+
+```bash
+# Start with 3 replicas of the web service
+docker compose up -d --scale web=3
+
+# Scale up to 5 (live — no downtime)
+docker compose up -d --scale web=5
+
+# Scale down to 2
+docker compose up -d --scale web=2
+
+# Check how many replicas are running
+docker compose ps
+```
+
+> **Note on naming**: Docker Compose names scaled containers `<project>-<service>-<n>` (e.g., `myapp-web-1`, `myapp-web-2`). Containers can reach each other using the service name — Docker's internal DNS resolves `web` to all containers in the service via round-robin.
+
+### Traefik as a Compose-Native Load Balancer
+
+Traefik is the cleanest way to load-balance Docker Compose services. It reads container labels — no manual upstream config needed. When you scale a service, Traefik **automatically detects the new replicas** and adds them to the pool.
+
+**`compose.yaml` with Traefik auto-discovery:**
+
+```yaml
+version: "3.8"
+
+networks:
+  traefik-net:
+
+services:
+  traefik:
+    image: traefik:v3
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--api.dashboard=true"
+      - "--api.insecure=true"   # Dashboard on :8080 (dev only — protect in prod)
+    ports:
+      - "80:80"
+      - "8080:8080"             # Dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik-net
+
+  web:
+    image: traefik/whoami   # Simple test image — prints container info
+    networks:
+      - traefik-net
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.web.rule=Host(`app.localhost`)"
+      - "traefik.http.routers.web.entrypoints=web"
+      - "traefik.http.services.web.loadbalancer.server.port=80"
+      # Round-robin across all replicas (default)
+      - "traefik.http.services.web.loadbalancer.sticky.cookie=false"
+```
+
+```bash
+# Start Traefik + 1 web instance
+docker compose up -d
+
+# Scale to 5 replicas — Traefik auto-discovers all of them
+docker compose up -d --scale web=5
+
+# Verify round-robin: each request should show a different container hostname
+for i in $(seq 1 10); do
+    curl -s -H "Host: app.localhost" http://localhost/ | grep Hostname
+done
+
+# Open Traefik dashboard to see the service with 5 backends
+open http://localhost:8080/dashboard/
+```
+
+**Load balancing behavior**: By default Traefik uses round-robin across all healthy replicas. When you scale down, Traefik immediately stops routing to removed containers. When a new replica starts, it joins the pool after passing Traefik's health checks.
+
+### Health Checks for Scaled Services
+
+When scaling, health checks prevent traffic from reaching containers that haven't finished starting:
+
+```yaml
+services:
+  web:
+    image: myapp:latest
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s    # Grace period — no checks during app startup
+    labels:
+      - "traefik.enable=true"
+      # Traefik respects Docker health status — only routes to healthy containers
+      - "traefik.http.services.web.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.web.loadbalancer.healthcheck.interval=10s"
+```
+
+### Scaling in Production: Podman + Systemd
+
+For rootless Podman in production (without Kubernetes), use systemd template units to run multiple instances:
+
+```ini
+# /etc/systemd/user/webapp@.service  (note the @ — this is a template unit)
+[Unit]
+Description=Web App Instance %i
+After=network-online.target
+
+[Service]
+ExecStart=podman run --rm \
+    --name webapp-%i \
+    --network=webapp-net \
+    --env-file=/etc/webapp/webapp.env \
+    -p 0:3000 \
+    ghcr.io/myorg/webapp:latest
+ExecStop=podman stop webapp-%i
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+# Enable and start 3 instances
+systemctl --user enable webapp@1 webapp@2 webapp@3
+systemctl --user start webapp@1 webapp@2 webapp@3
+
+# Check all instances
+systemctl --user status 'webapp@*'
+
+# Scale up: add a 4th
+systemctl --user enable --now webapp@4
+```
+
+### Choosing Your Container LB Strategy
+
+| Approach | Use When |
+|---|---|
+| **Nginx upstream block** | Simple, predictable — great when you know replica count ahead of time |
+| **Traefik with Docker labels** | Dynamic scaling — Traefik auto-discovers new replicas without config changes |
+| **HAProxy** | Maximum control, statistics, session persistence, connection draining |
+| **Kubernetes Services** | You've outgrown Compose and need orchestration |
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
 ## Intermediate: Container Registries
 
 A registry stores and distributes container images.
@@ -529,9 +746,97 @@ podman pull ghcr.io/uncleJS/myapp:1.0
 
 ## Intermediate: Podman Rootless & systemd Integration
 
-### Running Podman Rootless
+### The Rootless Security Model
 
-Rootless Podman runs entirely as a regular user — no root, no daemon, smaller attack surface.
+Rootless Podman runs entirely as a regular user — no root, no daemon, dramatically smaller attack surface. Understanding *why* this is secure requires a look at Linux user namespaces.
+
+#### User Namespace Remapping
+
+When you run `podman run` as a non-root user, Podman creates a **user namespace** for the container. Inside that namespace, the process sees itself as UID 0 (root). On the host, it maps to your unprivileged UID.
+
+```
+Host                         Container (user namespace)
+─────────────────────────    ──────────────────────────
+UID 1000 (alice)      ──►    UID 0 (root inside container)
+UID 1001              ──►    UID 1
+UID 1002              ──►    UID 2
+...                          ...
+```
+
+The mapping is stored in `/proc/self/uid_map`. The kernel enforces that even if a container process calls `setuid(0)`, it has no privileges outside its namespace.
+
+```bash
+# Confirm rootless is active
+podman info | grep -i rootless     # rootless: true
+
+# See the UID map for a running container
+podman inspect <container> --format '{{.HostConfig.UsernsMode}}'
+
+# View the actual mapping at the kernel level
+cat /proc/self/uid_map
+# Output: 0  1000  1   (container UID 0 = host UID 1000, 1 mapping)
+```
+
+#### Rootless vs Root-daemon Comparison
+
+| Aspect | Docker (root daemon) | Podman (rootless) |
+|---|---|---|
+| Daemon | `dockerd` runs as root | No daemon at all |
+| Socket | `/var/run/docker.sock` (world-writable risk) | Per-user: `$XDG_RUNTIME_DIR/podman/podman.sock` |
+| Privilege escalation risk | Compromised socket = root on host | No socket, no daemon to compromise |
+| Networking | Full bridge networking | `slirp4netns` or `pasta` (userspace networking) |
+| Port < 1024 | Can bind directly | Requires port forwarding workaround |
+| Storage | `/var/lib/docker` | `~/.local/share/containers` |
+
+#### Rootless Networking
+
+Rootless containers use userspace network stacks because creating real network interfaces requires `CAP_NET_ADMIN`.
+
+- **`slirp4netns`** — legacy userspace TCP/IP stack; slower but widely supported
+- **`pasta`** — modern replacement (Podman 4.4+); faster, better IPv6 support
+
+```bash
+# Check which network backend is in use
+podman info | grep networkBackend
+
+# Rootless containers can expose ports >= 1024 natively
+podman run -d -p 8080:80 --name webserver nginx
+
+# To bind port 80 (privileged) as rootless — use sysctl or a higher port
+# Option 1: Map host 80 → container 80 via firewall redirect (recommended)
+sudo sysctl net.ipv4.ip_unprivileged_port_start=80
+
+# Option 2: Use a host port >= 1024 and put a reverse proxy in front
+podman run -d -p 8080:80 nginx
+# Then configure Nginx/Traefik on port 80 to forward to localhost:8080
+```
+
+---
+
+### Podman Desktop
+
+**Podman Desktop** is the official GUI for managing rootless containers locally — available for Linux, macOS, and Windows. It's particularly useful for developers who want Docker Desktop parity without the licensing concerns.
+
+**Key capabilities:**
+- Start/stop/inspect containers, pods, images, and volumes
+- View real-time logs and resource usage
+- Port-forward into running containers
+- Manage Compose stacks (using `podman compose`)
+- Connect to remote Podman sockets (including WSL2 or SSH remotes)
+- Kubernetes integration — deploy to local `kind`/`minikube` clusters
+
+```bash
+# Install on Linux (Flatpak)
+flatpak install flathub io.podman_desktop.PodmanDesktop
+
+# Or download AppImage from podman-desktop.io
+```
+
+> **DevOps tip**: Podman Desktop's "Extensions" system lets you add Kubernetes, Red Hat OpenShift, and Compose plugins. It's a compelling replacement for Docker Desktop on developer workstations in RHEL/Fedora shops.
+
+---
+
+### Running Podman Rootless
 
 ```bash
 # Run as regular user (no sudo needed)
@@ -541,52 +846,246 @@ podman run -d -p 8080:80 --name webserver nginx
 podman info | grep -i rootless     # Should say "rootless: true"
 id                                  # You are NOT root
 
-# Rootless networking (uses slirp4netns or pasta)
+# Rootless networking
 podman network ls
+
+# User-scoped storage location
+ls ~/.local/share/containers/storage/
 ```
+
+---
 
 ### Podman Pods
 
-Podman supports the concept of **pods** (like Kubernetes pods) — multiple containers sharing the same network namespace.
+Podman supports the concept of **pods** (like Kubernetes pods) — multiple containers sharing the same network namespace. This is unique to Podman and has no Docker equivalent.
+
+```
+Pod: myapp
+├── infra container (pause)   ← holds the shared network namespace
+├── web (nginx)               ← shares pod's IP and ports
+└── app (your service)        ← shares pod's IP and ports
+```
+
+The **infra container** (`k8s.gcr.io/pause` or `localhost/podman-pause`) holds the network namespace open. Other containers in the pod join it. If a container restarts, the network namespace persists — just like Kubernetes.
 
 ```bash
-# Create a pod
+# Create a pod with a published port
 podman pod create --name myapp -p 8080:80
 
-# Add containers to the pod
+# Add containers to the pod (they share the pod's network)
 podman run -d --pod myapp --name web nginx
 podman run -d --pod myapp --name app myapp:1.0
 
-# List pods
+# List pods and their containers
 podman pod ls
+podman pod ps
 
-# Stop/start entire pod
+# Resource stats for the whole pod
+podman pod stats myapp
+
+# Stop/start/remove entire pod
 podman pod stop myapp
 podman pod start myapp
+podman pod rm -f myapp   # removes pod and all its containers
+
+# Generate Kubernetes YAML from a running pod (bridge to Module 06!)
+podman kube generate myapp -f myapp-pod.yaml
 ```
 
-### systemd Integration — Run Containers as Services
-
-Podman can generate systemd unit files so containers start automatically on boot.
+**Sidecar pattern example** — app container + log shipper sharing the same network:
 
 ```bash
-# Run your container first
+podman pod create --name logsidecar
+podman run -d --pod logsidecar --name app myapp:1.0
+podman run -d --pod logsidecar --name fluentbit \
+  -v /var/log/app:/var/log/app:ro \
+  fluent/fluent-bit:latest
+# Both containers reach each other via localhost inside the pod
+```
+
+---
+
+### systemd Integration — Two Approaches
+
+Podman offers two ways to run containers as systemd services:
+
+| Approach | Status | Best for |
+|---|---|---|
+| `podman generate systemd` | Deprecated (Podman v4.4+) | Legacy systems, quick one-offs |
+| **Quadlet** (`.container` unit files) | **Recommended** | Production, declarative, RHEL 9+ |
+
+---
+
+#### Approach A: `podman generate systemd` (Legacy)
+
+This approach generates a `.service` file from a *running* container. Still useful for older systems or quick setups.
+
+```bash
+# 1. Run your container first
 podman run -d --name webserver --restart always nginx
 
-# Generate a systemd unit file
+# 2. Generate the systemd unit file
+#    --new: creates a fresh container on start (rather than managing the existing one)
+#    --files: write to disk rather than stdout
 podman generate systemd --name webserver --files --new
 
-# This creates: container-webserver.service
-# Install and enable the service
+# 3. Install the generated unit
 mkdir -p ~/.config/systemd/user/
 cp container-webserver.service ~/.config/systemd/user/
 
+# 4. Enable and start
 systemctl --user daemon-reload
 systemctl --user enable --now container-webserver.service
 systemctl --user status container-webserver.service
 
-# Enable linger so services start at boot without login
+# 5. Enable linger so the service starts at boot without logging in
 loginctl enable-linger $USER
+
+# 6. View logs via the systemd journal
+journalctl --user -u container-webserver.service -f
+```
+
+> ⚠️ `podman generate systemd` is deprecated as of Podman 4.4. Use Quadlet for new deployments.
+
+---
+
+#### Approach B: Quadlet (Modern — Recommended)
+
+**Quadlet** is the production-grade, declarative way to run Podman containers as systemd services. You write a `.container` unit file and systemd's generator automatically creates the corresponding `.service` unit at `daemon-reload` time.
+
+**File locations:**
+
+| Scope | Directory |
+|---|---|
+| User (rootless) | `~/.config/containers/systemd/` |
+| System (root) | `/etc/containers/systemd/` |
+
+**Unit file types:**
+
+| Extension | Purpose |
+|---|---|
+| `.container` | Define a single container as a service |
+| `.network` | Define a Podman network (CNI/Netavark) |
+| `.pod` | Define a Podman pod |
+| `.volume` | Define a named Podman volume |
+| `.image` | Pre-pull an image as a systemd dependency |
+
+##### Example: Simple web server
+
+```ini
+# ~/.config/containers/systemd/webserver.container
+
+[Unit]
+Description=Nginx Web Server
+After=network-online.target
+
+[Container]
+Image=docker.io/library/nginx:alpine
+PublishPort=8080:80
+Volume=%h/www:/usr/share/nginx/html:ro,z
+Environment=NGINX_HOST=localhost
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+# Reload systemd — Quadlet generator creates the .service unit automatically
+systemctl --user daemon-reload
+
+# The service name is derived from the filename (without .container)
+systemctl --user start webserver
+systemctl --user enable webserver
+systemctl --user status webserver
+
+# Logs
+journalctl --user -u webserver -f
+```
+
+##### Example: Network + two containers
+
+```ini
+# ~/.config/containers/systemd/appnet.network
+[Network]
+Driver=bridge
+Subnet=10.88.1.0/24
+```
+
+```ini
+# ~/.config/containers/systemd/redis.container
+[Unit]
+Description=Redis Cache
+After=network-online.target
+
+[Container]
+Image=docker.io/library/redis:7-alpine
+Network=appnet.network
+Volume=redis-data:/data:Z
+
+[Service]
+Restart=always
+```
+
+```ini
+# ~/.config/containers/systemd/myapp.container
+[Unit]
+Description=My Application
+After=redis.service
+
+[Container]
+Image=ghcr.io/uncleJS/myapp:1.0
+Network=appnet.network
+PublishPort=3000:3000
+Environment=REDIS_URL=redis://redis:6379
+HealthCmd=curl -f http://localhost:3000/health || exit 1
+HealthInterval=30s
+HealthRetries=3
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+# Apply all three units at once
+systemctl --user daemon-reload
+
+# Start in dependency order
+systemctl --user start myapp   # starts redis first (After=redis.service)
+
+# Validate unit files before applying
+systemd-analyze --user verify ~/.config/containers/systemd/myapp.container
+```
+
+##### Key Quadlet directives reference
+
+| Directive | Description |
+|---|---|
+| `Image=` | Container image to use |
+| `PublishPort=` | `hostPort:containerPort` |
+| `Volume=` | Mount: `hostPath:containerPath:options` |
+| `Network=` | Attach to a `.network` unit or existing network |
+| `Environment=` | Set env var (`KEY=value`) |
+| `EnvironmentFile=` | Load env vars from a file |
+| `Secret=` | Mount a Podman secret by name |
+| `HealthCmd=` | Health check command |
+| `HealthInterval=` | Interval between health checks |
+| `AutoUpdate=` | `registry` = auto-pull new image tags |
+| `Pod=` | Attach to a `.pod` unit |
+| `Label=` | Add container label |
+| `Exec=` | Override container entrypoint command |
+
+```bash
+# Enable linger for rootless services to start at boot
+loginctl enable-linger $USER
+loginctl show-user $USER | grep Linger
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -695,6 +1194,422 @@ COPY . .    # Source code changes don't bust the npm install cache
 
 ---
 
+## Advanced: Podman in Production
+
+This section covers production-grade Podman patterns: OCI builds without Docker, CI/CD integration, image registry management with `skopeo`, secrets management, and a complete multi-container Quadlet stack.
+
+---
+
+### OCI Image Building Without Docker
+
+Podman can build OCI-compliant images without the Docker daemon, making it ideal for rootless CI pipelines.
+
+#### Containerfile vs Dockerfile
+
+`Containerfile` is the OCI-standard name for what Docker calls a `Dockerfile`. The syntax is identical — Podman accepts both names automatically.
+
+```bash
+# Both work — Podman checks for Containerfile first, then Dockerfile
+podman build -t myapp:1.0 .
+
+# Explicitly specify the file
+podman build -f Containerfile -t myapp:1.0 .
+podman build -f Dockerfile -t myapp:1.0 .
+```
+
+#### Multi-Platform Builds
+
+```bash
+# Build for multiple CPU architectures
+podman build \
+  --platform linux/amd64,linux/arm64 \
+  --manifest myapp:1.0 \
+  .
+
+# Push the multi-arch manifest to a registry
+podman manifest push myapp:1.0 ghcr.io/uncleJs/myapp:1.0
+```
+
+#### buildah — Low-Level OCI Builder
+
+`buildah` is the underlying OCI image build tool that Podman uses internally. It's useful when you need fine-grained control over image layers.
+
+```bash
+# Install
+sudo dnf install -y buildah    # RHEL/Fedora
+sudo apt install -y buildah    # Ubuntu
+
+# Build from a Containerfile (same as podman build)
+buildah bud -t myapp:1.0 .
+
+# Script-based build (no Containerfile at all)
+container=$(buildah from ubi9-minimal)
+buildah run $container -- dnf install -y python3
+buildah copy $container app.py /opt/app.py
+buildah config --cmd "python3 /opt/app.py" $container
+buildah commit $container myapp:1.0
+
+# Push to registry
+buildah push myapp:1.0 ghcr.io/uncleJs/myapp:1.0
+```
+
+> **buildah vs podman build**: Use `podman build` for everyday image builds. Use `buildah` when you need scripted, layer-by-layer control — for example, in pipeline stages that add security patches to a base image without a full rebuild.
+
+---
+
+### Podman in CI/CD
+
+#### GitHub Actions — Rootless Podman
+
+GitHub-hosted runners include Podman. Replace `docker` with `podman` — no additional setup needed.
+
+```yaml
+# .github/workflows/build.yml
+name: Build & Push Image
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Build image
+        run: podman build -t ghcr.io/${{ github.repository }}:${{ github.sha }} .
+
+      - name: Push image
+        run: podman push ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+      - name: Scan for vulnerabilities
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
+          trivy image --exit-code 1 --severity CRITICAL \
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+```
+
+#### GitLab CI — Rootless Podman (No `--privileged`)
+
+Traditional Docker-in-Docker requires `--privileged`. Podman avoids this entirely via its rootless model.
+
+```yaml
+# .gitlab-ci.yml
+variables:
+  IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+
+build:
+  image: quay.io/podman/stable:latest
+  script:
+    - podman login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - podman build -t $IMAGE_TAG .
+    - podman push $IMAGE_TAG
+  # No 'privileged: true' needed!
+```
+
+#### Podman Socket — Docker API Drop-In
+
+If your CI tools only speak the Docker API (e.g., older Compose tools, Testcontainers), expose Podman's socket as a Docker API replacement:
+
+```bash
+# Enable and start the Podman socket (user scope)
+systemctl --user enable --now podman.socket
+
+# The socket path
+echo $XDG_RUNTIME_DIR/podman/podman.sock
+# e.g. /run/user/1000/podman/podman.sock
+
+# Point Docker CLI (or any Docker-compatible tool) at the Podman socket
+export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/podman/podman.sock
+docker ps    # ← actually talking to Podman
+docker compose up -d    # ← Compose running against Podman
+```
+
+---
+
+### Image Registry Workflow with skopeo
+
+`skopeo` is a command-line tool for working with remote container image registries — copying, inspecting, signing, and syncing — **without pulling images to local storage first**.
+
+```bash
+# Install
+sudo dnf install -y skopeo    # RHEL/Fedora
+sudo apt install -y skopeo    # Ubuntu
+
+# Inspect a remote image without pulling it
+skopeo inspect docker://docker.io/library/nginx:alpine
+skopeo inspect docker://ghcr.io/uncleJs/myapp:1.0
+
+# Copy image between registries (no local pull needed)
+skopeo copy \
+  docker://docker.io/library/nginx:alpine \
+  docker://ghcr.io/uncleJs/nginx:alpine
+
+# Copy to/from local OCI directory
+skopeo copy docker://nginx:alpine oci:/tmp/nginx-oci
+
+# Sync an entire repository (all tags)
+skopeo sync \
+  --src docker --dest docker \
+  docker.io/library/nginx ghcr.io/uncleJs/mirror/
+
+# Delete a remote tag
+skopeo delete docker://ghcr.io/uncleJs/myapp:old-tag
+
+# List available tags
+skopeo list-tags docker://docker.io/library/nginx
+```
+
+#### Registry Configuration (`registries.conf`)
+
+On RHEL/Fedora systems, Podman and `skopeo` use `/etc/containers/registries.conf` to configure search order, mirrors, and blocked registries:
+
+```toml
+# /etc/containers/registries.conf
+
+# Default search registries (checked in order when image has no prefix)
+unqualified-search-registries = ["registry.access.redhat.com", "docker.io"]
+
+# Mirror a registry for air-gapped/pull-through caching
+[[registry]]
+prefix = "docker.io"
+location = "docker.io"
+
+  [[registry.mirror]]
+  location = "mirror.internal.corp/docker-cache"
+
+# Block a registry entirely
+[[registry]]
+prefix = "untrusted-registry.example.com"
+blocked = true
+```
+
+```bash
+# Per-user override (takes precedence over /etc)
+mkdir -p ~/.config/containers/
+# Edit ~/.config/containers/registries.conf
+
+# Test which registry would be used
+podman image search --list-tags nginx
+```
+
+---
+
+### Secrets Management
+
+Podman has a built-in secrets manager that stores sensitive data and mounts it into containers at runtime — keeping secrets out of image layers and environment variables.
+
+```bash
+# Create a secret from a literal value
+echo "supersecretpassword" | podman secret create db-password -
+
+# Create a secret from a file
+podman secret create tls-cert /path/to/cert.pem
+
+# List secrets (values are never shown)
+podman secret ls
+
+# Inspect a secret (metadata only, not the value)
+podman secret inspect db-password
+
+# Use a secret in a container (mounted as a file under /run/secrets/)
+podman run -d \
+  --secret db-password \
+  --name myapp \
+  myapp:1.0
+# Secret is accessible at /run/secrets/db-password inside the container
+
+# Custom mount path
+podman run -d \
+  --secret db-password,target=/etc/myapp/db.password \
+  myapp:1.0
+
+# Use in a Quadlet unit
+# ~/.config/containers/systemd/myapp.container
+# [Container]
+# Secret=db-password,target=/run/secrets/db-password
+
+# Remove a secret
+podman secret rm db-password
+```
+
+---
+
+### Full Production Quadlet Stack
+
+A complete three-tier application deployed entirely with Quadlet unit files: Nginx frontend → Node.js API → Redis cache.
+
+```
+~/
+└── .config/containers/systemd/
+    ├── prod.network        ← shared bridge network
+    ├── redis.container     ← Redis cache
+    ├── api.container       ← Node.js API (depends on Redis)
+    └── frontend.container  ← Nginx reverse proxy (depends on API)
+```
+
+#### Step 1 — Create the network unit
+
+```ini
+# ~/.config/containers/systemd/prod.network
+[Network]
+Driver=bridge
+Subnet=10.89.0.0/24
+Label=app=myapp
+Label=env=production
+```
+
+#### Step 2 — Redis container unit
+
+```ini
+# ~/.config/containers/systemd/redis.container
+[Unit]
+Description=Redis Cache (myapp)
+After=network-online.target
+
+[Container]
+Image=docker.io/library/redis:7-alpine
+Network=prod.network
+Volume=redis-data:/data:Z
+Exec=redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+EnvironmentFile=%h/.config/containers/systemd/myapp.env
+HealthCmd=redis-cli -a ${REDIS_PASSWORD} ping
+HealthInterval=15s
+HealthRetries=3
+Label=app=myapp
+Label=tier=cache
+
+[Service]
+Restart=always
+RestartSec=5s
+```
+
+#### Step 3 — API container unit
+
+```ini
+# ~/.config/containers/systemd/api.container
+[Unit]
+Description=Node.js API (myapp)
+After=redis.service
+Requires=redis.service
+
+[Container]
+Image=ghcr.io/uncleJs/myapp-api:1.0
+Network=prod.network
+PublishPort=127.0.0.1:3000:3000
+EnvironmentFile=%h/.config/containers/systemd/myapp.env
+Secret=db-password,target=/run/secrets/db-password
+HealthCmd=curl -sf http://localhost:3000/health || exit 1
+HealthInterval=20s
+HealthRetries=3
+AutoUpdate=registry
+Label=app=myapp
+Label=tier=api
+
+[Service]
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=default.target
+```
+
+#### Step 4 — Frontend container unit
+
+```ini
+# ~/.config/containers/systemd/frontend.container
+[Unit]
+Description=Nginx Frontend (myapp)
+After=api.service
+Requires=api.service
+
+[Container]
+Image=ghcr.io/uncleJs/myapp-frontend:1.0
+Network=prod.network
+PublishPort=8080:80
+Volume=%h/conf/nginx.conf:/etc/nginx/nginx.conf:ro,Z
+HealthCmd=curl -sf http://localhost/ || exit 1
+HealthInterval=30s
+AutoUpdate=registry
+Label=app=myapp
+Label=tier=frontend
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target
+```
+
+#### Step 5 — Environment file
+
+```bash
+# ~/.config/containers/systemd/myapp.env
+REDIS_PASSWORD=changeme_in_production
+REDIS_URL=redis://:changeme_in_production@redis:6379
+NODE_ENV=production
+API_BASE=http://api:3000
+```
+
+```bash
+# Secure the env file
+chmod 600 ~/.config/containers/systemd/myapp.env
+```
+
+#### Step 6 — Deploy
+
+```bash
+# Validate all unit files
+systemd-analyze --user verify \
+  ~/.config/containers/systemd/redis.container \
+  ~/.config/containers/systemd/api.container \
+  ~/.config/containers/systemd/frontend.container
+
+# Apply
+systemctl --user daemon-reload
+
+# Start (systemd resolves dependency order automatically)
+systemctl --user start frontend
+
+# Verify
+systemctl --user status frontend api redis
+podman ps
+podman pod ps
+
+# Enable for auto-start at boot
+systemctl --user enable frontend
+loginctl enable-linger $USER
+
+# View aggregated logs
+journalctl --user -u frontend -u api -u redis -f
+
+# Check health status
+podman healthcheck run api
+```
+
+#### Auto-update with `podman-auto-update`
+
+When `AutoUpdate=registry` is set in a `.container` unit, Podman can automatically pull new image versions:
+
+```bash
+# Enable the auto-update timer (checks daily by default)
+systemctl --user enable --now podman-auto-update.timer
+
+# Manual update check
+podman auto-update
+
+# Dry run (shows what would be updated)
+podman auto-update --dry-run
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
 ## Tools & Commands Reference
 
 | Command | Docker | Podman |
@@ -711,10 +1626,24 @@ COPY . .    # Source code changes don't bust the npm install cache
 | Remove image | `docker rmi` | `podman rmi` |
 | Network create | `docker network create` | `podman network create` |
 | Volume create | `docker volume create` | `podman volume create` |
-| Compose up | `docker compose up -d` | `podman-compose up -d` |
+| Compose up | `docker compose up -d` | `podman compose up -d` / `podman-compose up -d` |
 | Login to registry | `docker login` | `podman login` |
-| Generate systemd | N/A | `podman generate systemd` |
+| Generate systemd (legacy) | N/A | `podman generate systemd --name <c> --files --new` |
+| Quadlet unit dir (user) | N/A | `~/.config/containers/systemd/` |
 | Create pod | N/A | `podman pod create` |
+| Pod list | N/A | `podman pod ls` |
+| Pod stats | N/A | `podman pod stats` |
+| Generate K8s YAML | N/A | `podman kube generate` |
+| Run K8s YAML | N/A | `podman kube play` |
+| Secret create | N/A | `podman secret create <name> -` |
+| Secret list | N/A | `podman secret ls` |
+| Auto-update check | N/A | `podman auto-update` |
+| Image inspect (remote) | N/A | `skopeo inspect docker://<image>` |
+| Image copy (registry→registry) | N/A | `skopeo copy docker://<src> docker://<dst>` |
+| Image sync (repo mirror) | N/A | `skopeo sync --src docker --dest docker <repo> <dst>` |
+| List remote tags | N/A | `skopeo list-tags docker://<image>` |
+| Low-level OCI build | N/A | `buildah bud -t <tag> .` |
+| Enable linger | N/A | `loginctl enable-linger $USER` |
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -755,12 +1684,48 @@ COPY . .    # Source code changes don't bust the npm install cache
 4. Exit and remove the container
 5. Run a new container with the same volume and confirm the file still exists
 
-### Lab 5.5 — Podman systemd Service
+### Lab 5.5 — Podman systemd Service (Both Approaches)
 
-1. Run an nginx container with Podman
-2. Generate a systemd unit file: `podman generate systemd --name nginx-podman --files`
-3. Install and enable the service
-4. Reboot (or simulate reboot) and confirm the container starts automatically
+Practice both the legacy and modern methods for running Podman containers as systemd services.
+
+**Path A — Legacy: `podman generate systemd`**
+
+1. Run an nginx container: `podman run -d --name nginx-legacy nginx:alpine`
+2. Generate the unit file: `podman generate systemd --name nginx-legacy --files --new`
+3. Install it: `mkdir -p ~/.config/systemd/user/ && cp container-nginx-legacy.service ~/.config/systemd/user/`
+4. Enable and start: `systemctl --user daemon-reload && systemctl --user enable --now container-nginx-legacy.service`
+5. Verify: `systemctl --user status container-nginx-legacy.service`
+6. View logs: `journalctl --user -u container-nginx-legacy.service -n 20`
+7. Stop and disable the service, then remove the unit file
+
+**Path B — Modern: Quadlet**
+
+1. Create the Quadlet unit file:
+   ```bash
+   mkdir -p ~/.config/containers/systemd/
+   ```
+   Write `~/.config/containers/systemd/nginx-quadlet.container`:
+   ```ini
+   [Unit]
+   Description=Nginx via Quadlet
+
+   [Container]
+   Image=docker.io/library/nginx:alpine
+   PublishPort=8081:80
+
+   [Service]
+   Restart=always
+
+   [Install]
+   WantedBy=default.target
+   ```
+2. Validate the unit: `systemd-analyze --user verify ~/.config/containers/systemd/nginx-quadlet.container`
+3. Apply: `systemctl --user daemon-reload`
+4. Start: `systemctl --user start nginx-quadlet`
+5. Test: `curl http://localhost:8081`
+6. View logs: `journalctl --user -u nginx-quadlet -f`
+7. Enable for boot: `systemctl --user enable nginx-quadlet && loginctl enable-linger $USER`
+8. Confirm linger is active: `loginctl show-user $USER | grep Linger`
 
 ### Lab 5.6 — Image Security Scan
 
@@ -778,10 +1743,15 @@ COPY . .    # Source code changes don't bust the npm install cache
 
 - [Docker Official Documentation](https://docs.docker.com/)
 - [Podman Official Documentation](https://podman.io/docs)
+- [Podman Desktop](https://podman-desktop.io/)
+- [Quadlet — Podman systemd integration](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)
+- [skopeo — Image Registry Tool](https://github.com/containers/skopeo)
+- [buildah — OCI Image Builder](https://buildah.io/)
 - [OCI Image Specification](https://github.com/opencontainers/image-spec)
 - [Trivy — Container Vulnerability Scanner](https://trivy.dev/)
 - [Best Practices for Writing Dockerfiles](https://docs.docker.com/develop/develop-images/dockerfile_best-practices/)
 - [Rootless Containers](https://rootlesscontaine.rs/)
+- [pasta — Fast Rootless Networking](https://passt.top/)
 - [Glossary: Container](./glossary.md#c), [Image](./glossary.md#i), [Podman](./glossary.md#p), [Volume](./glossary.md#v)
 - **Certification**: CKAD (Certified Kubernetes Application Developer) — containers are a prerequisite
 

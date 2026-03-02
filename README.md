@@ -2,6 +2,8 @@
 
 > A comprehensive, progressive DevOps curriculum — from Linux fundamentals to advanced GitOps and production-grade deployments.
 
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![15 Modules](https://img.shields.io/badge/modules-15-grey) ![7 Phases](https://img.shields.io/badge/phases-7-grey) ![Levels](https://img.shields.io/badge/levels-Beginner%20%E2%86%92%20Advanced-brightgreen) ![Linux](https://img.shields.io/badge/Linux-Bash%20%C2%B7%20systemd-FCC624?logo=linux&logoColor=black) ![Containers](https://img.shields.io/badge/Containers-Docker%20%C2%B7%20Podman%20%C2%B7%20K8s-2496ED?logo=docker&logoColor=white) ![Cloud](https://img.shields.io/badge/Cloud-AWS%20%C2%B7%20Azure%20%C2%B7%20GCP-FF9900?logo=amazonaws&logoColor=white) ![IaC](https://img.shields.io/badge/IaC-Terraform%20%C2%B7%20Ansible-7B42BC?logo=terraform&logoColor=white) ![CI/CD](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions%20%C2%B7%20GitLab%20%C2%B7%20Jenkins-2088FF?logo=githubactions&logoColor=white)
+
 ---
 
 ## Table of Contents

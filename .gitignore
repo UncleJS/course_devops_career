@@ -1,0 +1,114 @@
+# DevOps Career Course — .gitignore
+
+# ─── Environment & Secrets ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.env
+
+# ─── Credential & Config Files ──────────────────────────────────────────────
+# Terraform credentials and state (may contain secrets)
+*.tfvars
+*.tfvars.json
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Ansible vault passwords and inventory secrets
+vault_pass.txt
+vault-password
+vault-password-file
+*.vault_pass
+ansible_vault_password*
+inventory/group_vars/all/vault.yml
+inventory/host_vars/*/vault.yml
+
+# Kubeconfig (may contain cluster credentials)
+kubeconfig
+kubeconfig.yaml
+*.kubeconfig
+.kube/config
+
+# AWS credentials
+.aws/credentials
+.aws/config
+aws_credentials
+
+# GCP service account keys
+*.json
+!package.json
+!package-lock.json
+gcp_key*.json
+*-service-account*.json
+*_service_account*.json
+service_account_key*.json
+
+# Azure credentials
+.azure/
+azure_credentials
+
+# SSH private keys
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
+*.pem
+*.key
+!*.pubkey
+
+# Generic secrets and credential files
+credentials
+credentials.yml
+credentials.yaml
+credentials.json
+secrets.yml
+secrets.yaml
+secrets.json
+config.local.*
+*_credentials.*
+*_password.*
+*_secret.*
+passwords.txt
+auth.json
+
+# ─── Build Outputs & Dependencies ───────────────────────────────────────────
+node_modules/
+vendor/
+dist/
+build/
+out/
+target/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# ─── Tool Cache & Temp Files ─────────────────────────────────────────────────
+.cache/
+.tmp/
+tmp/
+temp/
+*.tmp
+*.log
+*.bak
+*.swp
+*.swo
+*~
+
+# ─── IDE & Editor Files ─────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db
+
+# ─── Container & Compose Overrides ──────────────────────────────────────────
+docker-compose.override.yml
+docker-compose.local.yml
+
+# ─── Helm secrets plugin ────────────────────────────────────────────────────
+secrets.yaml

@@ -68,7 +68,48 @@ By the end of this module, you will be able to:
 
 GitOps is an operational model where the **entire desired system state is stored in Git** and changes are applied automatically by a reconciliation loop.
 
+The pull model is the defining safety property of GitOps. In a traditional push-based pipeline, the CI system needs cluster credentials to deploy — it connects to the cluster and applies changes. This means every CI job is a potential lateral movement path if a runner is compromised, and every secret rotation requires updating CI configuration. In a GitOps pull model, the cluster's own agent (ArgoCD or Flux) reaches out to Git and applies changes from inside the cluster network. The cluster credentials never leave the cluster. A compromised CI runner cannot deploy to production by itself; it can only propose a change by updating Git, which still requires a merge review.
+
+Drift detection and auto-correction are what separate GitOps from simply using Git as a deployment trigger. A GitOps agent continuously compares the desired state in Git against the actual state in the cluster. When they diverge — whether because a developer edited something directly with `kubectl`, an autoscaler changed a replica count, or a canary deployment left behind resources — the agent detects the drift and can automatically correct it. This property ensures that Git remains the genuine source of truth rather than becoming one artifact among many that partially describes the system.
+
+The App-of-Apps pattern solves the bootstrapping problem for large GitOps deployments. Instead of registering every application individually in ArgoCD, you create a single "root" Application that points to a directory containing ArgoCD Application manifests. When ArgoCD syncs the root App, it discovers and creates all the child Applications, which in turn sync their workloads. This means the entire cluster's application portfolio can be bootstrapped from a single `kubectl apply`, and new applications are added to the cluster simply by committing an Application manifest to Git.
+
 The four GitOps principles (from OpenGitOps):
+
+| Principle | Description |
+|-----------|-------------|
+| **Declarative** | System state described declaratively (YAML, Terraform HCL) |
+| **Versioned and immutable** | Git is the single source of truth; history is immutable |
+| **Pulled automatically** | Software agents pull state from Git, not pushed from pipelines |
+| **Continuously reconciled** | Agents detect and correct drift from desired state |
+
+### GitOps vs traditional CI/CD
+
+```
+Traditional (Push):              GitOps (Pull):
+CI pipeline builds image    →    CI pipeline builds image
+CI pipeline deploys to cluster   CI pipeline pushes to Git repo
+(cluster credentials in CI)      Argo/Flux polls Git
+                                 Argo/Flux applies changes to cluster
+                                 (no cluster creds in CI!)
+```
+
+```mermaid
+flowchart LR
+    DEV["Developer<br/>(git push / PR)"]
+    GIT["Git repository<br/>(source of truth)"]
+    CI["CI pipeline<br/>(build, test, scan,<br/>update image tag)"]
+    CFG["Config repo<br/>(Kubernetes manifests)"]
+    AGENT["ArgoCD / Flux<br/>(polls for drift)"]
+    CLUSTER["Kubernetes cluster<br/>(actual state)"]
+
+    DEV -->|"push code"| GIT
+    GIT -->|"trigger"| CI
+    CI -->|"update image tag"| CFG
+    CFG -->|"pull desired state"| AGENT
+    AGENT -->|"reconcile to desired state"| CLUSTER
+    CLUSTER -->|"drift detected"| AGENT
+```
 
 | Principle | Description |
 |-----------|-------------|
@@ -133,6 +174,29 @@ app-repo/            config-repo/
 ### ArgoCD
 
 ArgoCD is a declarative GitOps continuous delivery tool for Kubernetes.
+
+```mermaid
+flowchart TD
+    UI["ArgoCD UI<br/>(web dashboard)"]
+    CLI2["argocd CLI"]
+    API["ArgoCD API Server<br/>(RBAC, auth, OIDC)"]
+    REPO["Repo Server<br/>(clone Git, render manifests)"]
+    CTRL["Application Controller<br/>(compare desired vs actual)"]
+    GIT2["Git repositories<br/>(desired state)"]
+    APP["Application CR<br/>(defines source + destination)"]
+    K8S["Kubernetes API<br/>(actual state)"]
+    AM["Alertmanager / Notifications<br/>(sync status webhooks)"]
+
+    UI --> API
+    CLI2 --> API
+    API --> REPO
+    API --> CTRL
+    REPO --> GIT2
+    CTRL --> APP
+    CTRL -->|"apply manifests"| K8S
+    CTRL -->|"read actual state"| K8S
+    CTRL --> AM
+```
 
 #### Install ArgoCD
 
@@ -383,6 +447,12 @@ spec:
 
 ### ArgoCD vs Flux
 
+ArgoCD is UI-first and built around a centralised Application model, making it the natural choice for teams that want a visual operations dashboard, clear application ownership, and project-based multi-tenancy with RBAC. The web UI gives platform teams and application owners a shared surface for understanding deployment state, reviewing sync history, and triggering rollbacks — which is valuable in larger organisations where not everyone operates through the CLI.
+
+Flux is toolkit-first and automation-only. There is no built-in web UI; the interface is kubectl, the flux CLI, and Git itself. This makes Flux a better fit for platform engineering teams and SREs who think in terms of composable Kubernetes controllers and want to build automation on top of Flux's primitives rather than consume a complete product. Flux's modular architecture also means you can adopt just the GitRepository and Kustomization controllers without the Helm or image automation controllers if you do not need them. The trade-off is that onboarding non-engineering stakeholders into a Flux workflow is harder because there is no UI to hand them.
+
+In practice, many teams choose based on organisational context rather than pure technical merit. If you have a platform team serving multiple development squads and want a product they can all access, ArgoCD's UI is a meaningful advantage. If you are building a fully automated platform where all interaction happens through Git PRs and your team is comfortable with Kubernetes operator patterns, Flux's composability often wins. Both tools are CNCF-graduated and production-ready; the choice is primarily about workflow and team preference.
+
 | Feature | ArgoCD | Flux |
 |---------|--------|------|
 | **UI** | Rich web UI | CLI-first (no built-in UI) |
@@ -405,6 +475,12 @@ spec:
 ### Why Service Mesh?
 
 A service mesh adds an infrastructure layer for service-to-service communication — providing mTLS, observability, traffic control, and resilience **without application code changes**.
+
+The decision to adopt a service mesh should weigh capability against operational complexity. Istio — the most feature-rich option — deploys Envoy proxy sidecars into every pod, giving you fine-grained traffic control, mutual TLS, and automatic telemetry. The cost is real: each Envoy sidecar consumes around 50 MB of memory and adds a few milliseconds of latency per request. In a cluster with 100 pods, that is 5 GB of additional memory just for the proxy layer. The control plane components (istiod) add further operational surface area. Teams that have not needed the capabilities that justify this overhead often find themselves spending more time managing Istio than benefiting from it.
+
+Linkerd takes a different philosophy: do a smaller set of things but do them simply and efficiently. The Linkerd proxy is a purpose-built Rust binary rather than the general-purpose Envoy, which makes it significantly smaller (less than 10 MB per proxy) and lower latency. Linkerd covers the most common use cases — automatic mTLS, golden signal metrics per service, traffic splitting for canary deployments — without Istio's full traffic management API surface. For teams that need mTLS and observability but not the advanced traffic routing capabilities of Istio, Linkerd is often the better trade-off.
+
+eBPF-based meshes (Cilium with Hubble, Cilium Service Mesh) represent the emerging direction. Instead of sidecar proxies, they intercept network traffic at the kernel level using eBPF programs, which eliminates the per-pod proxy overhead entirely. This approach has lower latency, lower resource consumption, and no sidecar injection complexity — but it requires a modern Linux kernel and the eBPF ecosystem is still maturing relative to the more established sidecar-based tools.
 
 ```
 Without service mesh:
@@ -438,6 +514,37 @@ With service mesh (sidecar proxy):
 ### Istio
 
 Istio is the most feature-rich service mesh, using Envoy proxies as sidecars.
+
+```mermaid
+flowchart TD
+    subgraph "Control Plane"
+        ISTIOD["istiod<br/>(Pilot + Citadel + Galley)"]
+        PILOT["Pilot<br/>(xDS config distribution)"]
+        CITADEL["Citadel<br/>(certificate authority, mTLS)"]
+    end
+
+    subgraph "Data Plane"
+        SA["Service A<br/>(app container)"]
+        EA["Envoy sidecar A<br/>(proxy)"]
+        SB["Service B<br/>(app container)"]
+        EB["Envoy sidecar B<br/>(proxy)"]
+    end
+
+    PROM["Prometheus<br/>(metrics)"]
+    JAE["Jaeger / Tempo<br/>(traces)"]
+
+    ISTIOD --> PILOT
+    ISTIOD --> CITADEL
+    PILOT -->|"xDS: routes, clusters, endpoints"| EA
+    PILOT -->|"xDS: routes, clusters, endpoints"| EB
+    CITADEL -->|"issue mTLS certificates"| EA
+    CITADEL -->|"issue mTLS certificates"| EB
+    SA <--> EA
+    EA -->|"mTLS"| EB
+    EB <--> SB
+    EA -->|"telemetry"| PROM
+    EA -->|"spans"| JAE
+```
 
 #### Install Istio
 
@@ -706,6 +813,12 @@ linkerd viz tap deploy/my-api -n production
 
 ### What is an Operator?
 
+A Kubernetes Operator is a controller that extends the Kubernetes API with domain-specific operational knowledge. Rather than just deploying a stateless application, an Operator understands the lifecycle of a specific piece of software — a database cluster, a message broker, a certificate manager — and automates the day-two operations that would otherwise require human intervention: scaling, backup, restore, version upgrade, failover, and health remediation. The Operator pattern was introduced by CoreOS in 2016 to solve the gap between Kubernetes's generic workload primitives (Deployment, StatefulSet) and the complex operational needs of stateful software.
+
+The reconciliation loop is the core execution model. An Operator's controller watches for Custom Resources (CRs) of a specific kind — say, `PostgresCluster` — and whenever the desired state (what the CR says) diverges from the actual state (what is running in Kubernetes), the reconciler runs and takes actions to close the gap. This is exactly the same model that core Kubernetes controllers use for Deployments and Services; Operators simply apply it to higher-level abstractions. The key principle is idempotency: a reconciler should be able to run repeatedly and always converge to the desired state, regardless of whether the cluster was in a partial or failed state before.
+
+Stateful applications benefit most from the Operator pattern because their operational complexity cannot be expressed with generic Kubernetes primitives alone. A `StatefulSet` can ensure that pods are created in order and given stable storage, but it cannot understand that this particular database should not be upgraded to a new version unless a primary election has completed first, or that a backup must succeed before a node is removed from the cluster. This domain knowledge lives in the Operator's reconciler code — written by people who deeply understand the software being managed. Well-known examples include the Prometheus Operator, the CloudNativePG operator for PostgreSQL, Strimzi for Kafka, and the Elasticsearch ECK operator.
+
 A **Kubernetes Operator** encodes operational knowledge into code — it watches custom resources and reconciles the actual state to the desired state, automating day-2 operations (backups, failovers, upgrades).
 
 ```
@@ -723,8 +836,30 @@ kubectl apply -f my-database-cluster.yaml
     - Services
     - ConfigMaps
     - Secrets (creds)
-    - Backups (CronJob)
-    - Failover logic
+     - Backups (CronJob)
+     - Failover logic
+```
+
+```mermaid
+flowchart LR
+    CR["Custom Resource<br/>(e.g. PostgresCluster CR)"]
+    WATCH["Operator Watch<br/>(informer / event queue)"]
+    REC["Reconciler<br/>(compare desired vs actual)"]
+    ACT{"Diff?"}
+    APPLY["Apply changes<br/>(create / update / delete resources)"]
+    NOOP["No-op<br/>(already converged)"]
+    K8SAPI["Kubernetes API<br/>(StatefulSet, Service, Secret...)"]
+    REQUEUE["Requeue<br/>(watch for next change)"]
+
+    CR -->|"create / update / delete"| WATCH
+    WATCH --> REC
+    REC --> ACT
+    ACT -->|"Yes"| APPLY
+    ACT -->|"No"| NOOP
+    APPLY --> K8SAPI
+    APPLY --> REQUEUE
+    NOOP --> REQUEUE
+    REQUEUE --> WATCH
 ```
 
 ### Custom Resource Definition (CRD)
@@ -1445,7 +1580,11 @@ jobs:
 
 ### Project: Production-Grade Microservices Platform
 
-This capstone project integrates every concept from the 15-module course into a single deployable platform.
+This capstone project integrates every concept from the 15-module course into a single deployable platform. The purpose is not just to produce a working deployment but to internalise the connections between the disciplines: how version control practices from Module 01 feed into CI/CD from Module 03, how container skills from Module 05 underpin Kubernetes from Module 06, and how security from Module 13 must be woven into every earlier decision rather than bolted on at the end.
+
+The GitOps layer (Module 15) is the thread that stitches everything together. Infrastructure declared as Terraform (Module 08) is committed to Git. Kubernetes manifests managed by Ansible (Module 09) are committed to a config repository. ArgoCD watches that config repository and ensures the cluster always reflects what is in Git. CI/CD pipelines (Module 03) are triggered by application code changes, run security scans (Module 13), build container images (Module 05), push them to a registry, and update the image tag in the config repository — which ArgoCD then reconciles. Every step is auditable, reversible, and automated.
+
+Monitoring and observability (Modules 11 and 12) provide the feedback loop that makes this platform trustworthy. Prometheus collects metrics from all services, Loki collects structured logs, and Grafana provides dashboards and alerting. SLOs define what "working" means for each service. Chaos engineering (Module 14, Module 15) validates that the HA architecture actually survives the failures it was designed to survive. Vault (Module 13) manages credentials dynamically so no long-lived secret ever sits in a Kubernetes Secret or CI variable in plaintext. All of these capabilities exist not as separate tools but as a unified system where the outputs of each layer are consumed by the next.
 
 ### Architecture overview
 
@@ -1482,6 +1621,32 @@ This capstone project integrates every concept from the 15-module course into a 
 │  │  Vault + Gatekeeper + Falco              │  │                    │
 │  └──────────────────────────────────────────┘  │                    │
 └─────────────────────────────────────────────────────────────────────┘
+```
+
+```mermaid
+flowchart LR
+    DEV2["Developer<br/>(code + PR)"]
+    GH["GitHub<br/>(app repo + config repo)"]
+    CI2["CI Pipeline<br/>(SAST, SCA, image build,<br/>image sign, tag update)"]
+    REG["Container Registry<br/>(signed OCI images)"]
+    ARGO["ArgoCD<br/>(GitOps reconciler)"]
+    K8S2["Kubernetes Cluster<br/>(Istio mesh, Vault, Gatekeeper)"]
+    PROM2["Prometheus + Loki<br/>(metrics + logs)"]
+    GRAF2["Grafana<br/>(dashboards, SLOs, alerts)"]
+    VAULT2["Vault<br/>(dynamic secrets)"]
+    CHAOS["Chaos Mesh<br/>(DR validation)"]
+
+    DEV2 -->|"push code"| GH
+    GH -->|"trigger"| CI2
+    CI2 -->|"push image"| REG
+    CI2 -->|"update image tag"| GH
+    GH -->|"pull desired state"| ARGO
+    ARGO -->|"apply manifests"| K8S2
+    REG -->|"pull image"| K8S2
+    K8S2 -->|"scrape metrics / logs"| PROM2
+    PROM2 --> GRAF2
+    VAULT2 -->|"dynamic secrets"| K8S2
+    CHAOS -->|"fault injection"| K8S2
 ```
 
 ### Project components

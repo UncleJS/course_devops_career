@@ -35,6 +35,31 @@ Ansible is the most widely-used configuration management tool in DevOps. Where T
 
 Ansible is agentless — it connects to hosts over SSH and runs tasks. There's nothing to install on managed hosts beyond Python.
 
+```mermaid
+flowchart LR
+    CN["Control Node<br/>(your machine / CI runner)"]
+    PB["playbook<br/>(YAML task list)"]
+    INV["inventory<br/>(target hosts)"]
+    SSH["SSH connection"]
+    MOD["module<br/>(Python on remote host)"]
+    H1["Managed Host 1<br/>(web01)"]
+    H2["Managed Host 2<br/>(web02)"]
+    H3["Managed Host 3<br/>(db01)"]
+    RES["result<br/>(ok / changed / failed)"]
+
+    PB --> CN
+    INV --> CN
+    CN -->|"SSH"| SSH
+    SSH --> MOD
+    MOD --> H1
+    MOD --> H2
+    MOD --> H3
+    H1 -->|"returns"| RES
+    H2 -->|"returns"| RES
+    H3 -->|"returns"| RES
+    RES --> CN
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -62,6 +87,8 @@ By the end of this module you will be able to:
 ## Beginner: What is Ansible?
 
 Ansible matters because most operational work is repetitive long before it becomes complex. Installing packages, templating configs, restarting services, creating users, rotating secrets, and enforcing the same baseline across dozens of hosts are all tasks that humans can do manually but should not keep doing manually. The value of Ansible is that it lets you describe desired system state in a readable format and apply it consistently across many machines without installing a heavy agent everywhere.
+
+**Idempotency** is the central contract Ansible makes. Running a playbook twice should produce the same result as running it once. If nginx is already installed and already running, running the playbook again should report `ok` — not `changed`, and certainly not an error. This matters deeply for safe re-runs. During an incident you might need to run a playbook against fifty hosts to push an emergency configuration change. If you are uncertain whether the playbook has already run on some of them, idempotency means you can run it everywhere without fear of double-applying something that breaks. Most Ansible modules (apt, yum, service, file, user, template) are natively idempotent. The risky ones are `command`, `shell`, and `raw` — they run the command unconditionally unless you add `creates:`, `removes:`, or `changed_when:` logic to make them conditional.
 
 As you move through this module, keep one distinction in mind: Terraform is usually about provisioning infrastructure, while Ansible is usually about configuring and operating what already exists. Those tools overlap sometimes, but they solve different layers of the automation stack. Ansible becomes especially powerful after infrastructure is created, when you need to turn fresh servers into working application environments in a repeatable way.
 
@@ -271,7 +298,28 @@ A playbook is a YAML file containing one or more **plays** — each play targets
 
 Playbooks are where Ansible turns from a remote command runner into an automation system. Instead of saying "run this command on those servers," you start expressing desired state in a durable, reviewable form. That matters operationally because playbooks can be code-reviewed, tested in lower environments, scheduled, and rerun safely. They become part of the delivery workflow, not just a bag of shell commands.
 
+The hierarchy to internalize is **play → task → module**. A play declares the target hosts and context (`hosts`, `become`, `gather_facts`). Tasks are individual units of work, each calling exactly one module. The `become: yes` pattern uses sudo to escalate to root after connecting as a normal user — this is safer than connecting as root directly, because you can audit which user escalated, and many cloud images disable root SSH login by default. Ansible's execution model is sequential: gather facts first (unless disabled), then run each task in order. Handlers are a special case — they accumulate notifications during task execution and fire exactly once at the end of the play, regardless of how many tasks notified them.
+
 Notice the shape of a good playbook: it declares the target hosts, whether privilege escalation is required, whether facts should be gathered, and then a sequence of tasks that each do one understandable thing. This structure is what makes debugging manageable. When a deployment fails, you want to know exactly which task changed what, and why.
+
+```mermaid
+flowchart TD
+    PLAY1["Play 1<br/>hosts: web<br/>become: true"]
+    GF["gather_facts<br/>(collect host info)"]
+    T1["Task 1: apt - update cache"]
+    T2["Task 2: apt - install nginx"]
+    T3["Task 3: template - nginx.conf"]
+    H1["Handler: Restart nginx<br/>(only if notified)"]
+    PLAY2["Play 2<br/>hosts: db<br/>become: true"]
+    T4["Task 1: apt - install postgresql"]
+    T5["Task 2: service - start postgresql"]
+
+    PLAY1 --> GF --> T1 --> T2 --> T3
+    T3 -->|"notify"| H1
+    H1 -.->|"runs at play end"| PLAY1
+    PLAY1 --> PLAY2
+    PLAY2 --> T4 --> T5
+```
 
 ```yaml
 # playbooks/install-nginx.yml
@@ -353,6 +401,10 @@ ansible-playbook playbooks/install-nginx.yml -vvv    # Extra verbose
 ## Intermediate: Variables & Facts
 
 Variables and facts are what let one playbook adapt to many environments without becoming unreadable. Variables express the choices your automation should accept, while facts describe the machine Ansible is currently talking to. Together, they let you write automation that is flexible but still deterministic. Without them, you end up duplicating playbooks for every environment or baking environment assumptions directly into tasks.
+
+The **variable precedence chain** is essential to understand because its violations are the cause of most "why is Ansible using the wrong value?" debugging sessions. The chain runs roughly from lowest to highest priority: role `defaults/main.yml` (lowest, designed to be overridden), inventory variables, `group_vars`, `host_vars`, play-level `vars:`, task-level `vars:`, and finally extra-vars passed on the command line (`-e`). `extra_vars` always win — this is useful for one-off overrides in CI pipelines but dangerous if someone starts relying on it for permanent configuration. The practical rule is: put defaults in `defaults/main.yml`, put environment-specific values in `group_vars` or `host_vars`, and reserve `extra_vars` for emergency or CI overrides.
+
+**Ansible facts** are variables automatically gathered from the managed host at the start of a play (via the `setup` module). They include the OS family and distribution, available memory, number of CPUs, network interfaces, IP addresses, and hostname. Facts make playbooks genuinely dynamic: you can write a single playbook that installs packages correctly on both Ubuntu (using `apt`) and RHEL (using `dnf`) by branching on `ansible_os_family`. Facts also let templates render host-specific values like `ansible_fqdn` or `ansible_default_ipv4.address` without requiring those values to be manually maintained in inventory.
 
 This is also the point where automation can become confusing if naming and precedence are sloppy. Many Ansible mistakes come from not knowing which value wins, where it came from, or whether a variable was intended as a default, an override, or a secret. Treat variables as an interface and facts as runtime context, and the rest of the section becomes much easier to reason about.
 
@@ -497,9 +549,35 @@ http {
 
 Roles are the standard way to organize and reuse Ansible automation.
 
+Roles are the unit of reuse in Ansible. When you create a role for nginx, for postgresql, or for a hardening baseline, you give that automation a home that other playbooks can invoke by name. The directory structure is the role's interface: `defaults/main.yml` for overridable defaults, `vars/main.yml` for constants, `tasks/main.yml` as the entry point, `handlers/main.yml` for event-driven actions, `templates/` for Jinja2 files, and `files/` for static content. That predictable layout means any Ansible practitioner can navigate an unfamiliar role quickly without reading a README.
+
+The **Galaxy dependency system** (declared in `meta/main.yml`) lets roles declare their own dependencies on other roles. When you run `ansible-galaxy install`, Ansible resolves and downloads the full dependency graph. This is powerful for complex setups but requires version discipline — pinning role versions in `requirements.yml` is as important as pinning package versions in application code. An unpinned community role can introduce breaking changes on any `galaxy install` run.
+
+The `include_role` vs `import_role` distinction is subtle but operationally important. `import_role` is **static** — it is processed before the play runs, which means Ansible knows its tasks exist at parse time. This allows `when:` conditionals and `with_items` loops on the role to work predictably. `include_role` is **dynamic** — the role's tasks are loaded at runtime, which means they work inside loops and other dynamic contexts but cannot be targeted by `--tags` or `--skip-tags` unless the included role itself uses those tags. When in doubt, use `import_role` for top-level role inclusions and `include_role` when you need dynamic, loop-driven role execution.
+
 Roles are where Ansible starts to feel like an engineering system instead of a collection of playbooks. They give you a packaging model for automation: defaults, tasks, handlers, templates, files, and metadata all live in predictable places. That structure matters because automation grows quickly. What begins as a simple web server setup often becomes application deployment, secrets handling, OS tuning, monitoring integration, and lifecycle tasks.
 
 The design goal of a role is similar to the design goal of a good software module: one clear responsibility, sensible defaults, and a clean interface for overrides. If roles become giant bundles of unrelated tasks, they are hard to test and reuse. If their scope stays focused, teams can compose them into larger systems without losing clarity.
+
+```mermaid
+flowchart TD
+    ROLE["role/<br/>(e.g. nginx)"]
+    TASKS["tasks/<br/>main.yml"]
+    HANDLERS["handlers/<br/>main.yml"]
+    TEMPLATES["templates/<br/>nginx.conf.j2"]
+    FILES["files/<br/>index.html"]
+    VARS["vars/<br/>main.yml"]
+    DEFAULTS["defaults/<br/>main.yml"]
+    META["meta/<br/>main.yml"]
+
+    ROLE --> TASKS
+    ROLE --> HANDLERS
+    ROLE --> TEMPLATES
+    ROLE --> FILES
+    ROLE --> VARS
+    ROLE --> DEFAULTS
+    ROLE --> META
+```
 
 ### Role Directory Structure
 
@@ -630,6 +708,21 @@ Secrets management is where many otherwise clean automation projects become dang
 
 The main habit to develop here is separation of structure and secret content. Your playbooks should show how secrets are used without revealing the values themselves. That makes reviews safer, reduces accidental leakage, and gives teams a path toward integrating external secret managers later if the environment grows more regulated.
 
+```mermaid
+flowchart LR
+    PT["plaintext secret<br/>(e.g. db_password)"]
+    ENC["ansible-vault encrypt"]
+    BLOB["encrypted blob<br/>(stored in Git)"]
+    RUN["ansible-playbook<br/>(with vault password)"]
+    DEC["decrypted at runtime<br/>(in memory only)"]
+    TASK["passed to task<br/>(template / module)"]
+
+    PT --> ENC --> BLOB
+    BLOB --> RUN
+    RUN --> DEC
+    DEC --> TASK
+```
+
 ```bash
 # Create a new encrypted file
 ansible-vault create group_vars/all/secrets.yml
@@ -673,6 +766,10 @@ ssl_key: |
 ## Intermediate: Error Handling & Idempotency
 
 Idempotency is one of Ansible's most important promises: you should be able to rerun automation without making unnecessary changes or leaving the system in a worse state. That matters because real operations are full of retries. Networks flap, packages mirror slowly, services take longer than expected to start, and engineers rerun jobs during incident response. Automation that only works once is not automation you can trust.
+
+The `changed_when` and `failed_when` directives are the tools for encoding domain knowledge into Ansible. A `command` or `shell` task reports `changed` every time it runs because Ansible cannot know if running a shell script actually changed anything. Adding `changed_when: false` tells Ansible to always report `ok` regardless of the shell's output — appropriate for read-only checks. More precisely, `changed_when: "'updated' in result.stdout"` tells Ansible to report `changed` only when the script's output contains the word "updated," making the task honest about when it actually modified state. A task that always reports `changed` is misleading because it triggers handlers unnecessarily and makes audit logs harder to read.
+
+`failed_when` applies the same principle to failure detection. A command that exits with code 1 when a service is not running might not be a real failure — it might just mean you need to start the service. `failed_when: result.rc != 0 and 'not found' not in result.stderr` lets you express exactly when you consider the task failed, rather than accepting whatever the exit code means. These directives are how you build automation that tells the truth about what happened and responds to conditions rather than blindly following the script.
 
 Error handling builds on that trust. Good playbooks assume that some steps may fail and define what should happen next: retry, skip, rescue, notify, or abort. The goal is not to hide failure. The goal is to make failure behavior intentional and observable instead of surprising.
 
@@ -789,6 +886,34 @@ The command-line is fine for a single engineer, but teams need **role-based acce
 This section matters because operational maturity eventually requires more than local CLI execution. Once multiple teams share playbooks, credentials, approval flows, and maintenance windows, the problem is no longer just "can Ansible run this task?" It becomes "who is allowed to run it, against which inventory, with which secrets, and where is the audit trail?" AWX and AAP answer those governance questions.
 
 They also change how automation fits into the wider platform. Instead of every engineer running playbooks from a laptop, automation becomes a managed service with projects, inventories, job templates, schedules, and API-driven execution. That model is often the bridge between ad hoc operations and standardized platform engineering.
+
+```mermaid
+flowchart TD
+    subgraph "AWX Control Layer"
+        UI["Web UI<br/>(browser-based dashboard)"]
+        API["REST API<br/>(workflow trigger endpoint)"]
+        TE["Task Engine<br/>(job dispatcher)"]
+        CREDS["Credentials Store<br/>(encrypted vault)"]
+        INVSYNC["Inventory Sync<br/>(cloud provider APIs)"]
+    end
+    subgraph "Execution Layer"
+        WORKER["Worker<br/>(Execution Environment container)"]
+    end
+    subgraph "Managed Infrastructure"
+        H1["Managed Host A"]
+        H2["Managed Host B"]
+        H3["Managed Host C"]
+    end
+
+    UI --> TE
+    API --> TE
+    CREDS --> TE
+    INVSYNC --> TE
+    TE --> WORKER
+    WORKER -->|"SSH"| H1
+    WORKER -->|"SSH"| H2
+    WORKER -->|"SSH"| H3
+```
 
 ### AWX vs Ansible Automation Platform
 

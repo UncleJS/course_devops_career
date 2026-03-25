@@ -36,6 +36,27 @@
 
 Security is not a phase at the end of development — it is a continuous discipline integrated at every layer of the DevOps lifecycle. DevSecOps shifts security left, embedding automated security checks into CI/CD pipelines, treating security policy as code, and establishing least-privilege access patterns from day one. This module covers the foundational security pillars every DevOps practitioner must understand.
 
+The economic argument for shifting security left is grounded in data. Fixing a vulnerability at design time costs roughly one unit of effort. The same fix at code review costs ten units because it may require rethinking an approach. The same fix after deployment can cost one hundred units or more because it involves production incidents, emergency patches, customer notification, and potential regulatory consequences. This 1x/10x/100x cost ratio is why "security as an afterthought" is not just risky — it is provably more expensive than integrating security earlier.
+
+"Security as code" means applying the same engineering practices to security controls that you apply to application code: version control, peer review, automated testing, and continuous delivery. Security policies written in OPA Rego, secrets management configuration, RBAC manifests, and network policies are all code. They belong in Git, they should be reviewed, and they should be deployed automatically. When security controls are code, they scale with the system; when they are manual processes, they become the bottleneck.
+
+```mermaid
+flowchart LR
+    D["Design<br/>(threat model)"]
+    C["Code<br/>(SAST, secrets scan)"]
+    B["Build<br/>(SCA, image scan)"]
+    T["Test<br/>(DAST, pentest)"]
+    DP["Deploy<br/>(policy gates, signing)"]
+    OP["Operate<br/>(runtime detection, audit)"]
+
+    D -->|"security gate"| C
+    C -->|"security gate"| B
+    B -->|"security gate"| T
+    T -->|"security gate"| DP
+    DP -->|"security gate"| OP
+    OP -->|"feedback"| D
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -189,6 +210,30 @@ kubectl annotate serviceaccount my-ksa \
 
 Kubernetes RBAC controls who can do what to which resources within the cluster.
 
+The principle of least privilege in Kubernetes means that every human user, every service account, and every operator gets exactly the permissions it needs to do its job — no more. In practice this means almost no workload should have `cluster-admin`. That role grants unrestricted access to all resources across all namespaces, which means a compromised pod or stolen token becomes a full cluster takeover. When engineers reach for `cluster-admin` because it is convenient, they are making the entire cluster's blast radius available to that subject. The correct approach is to identify what the workload or user actually needs and express it in the minimum Role or ClusterRole.
+
+Namespace scoping is the primary blast-radius control in Kubernetes RBAC. A Role bound in the `production` namespace can only affect resources in that namespace. If a pod is compromised and its service account has only a namespace-scoped Role, the attacker's movement is constrained to that namespace. Cluster-scoped resources (Nodes, PersistentVolumes, Namespaces, ClusterRoles themselves) require ClusterRoles, but these should be granted sparingly and only to cluster-level operators like monitoring agents or cluster autoscalers. Application workloads should never have ClusterRoles.
+
+Service account automation is the most common RBAC gap. Kubernetes automatically mounts service account tokens into every pod unless `automountServiceAccountToken: false` is explicitly set. Many workloads have no need to talk to the Kubernetes API, yet carry a mounted credential by default. Auditing which service accounts have tokens mounted and which RBAC permissions those accounts carry is one of the highest-value security reviews a team can perform.
+
+```mermaid
+flowchart TD
+    S["Subject<br/>(User / Group / ServiceAccount)"]
+    RB["RoleBinding or ClusterRoleBinding"]
+    R["Role or ClusterRole<br/>(verbs on resources)"]
+    API["Kubernetes API Server<br/>(authorization)"]
+    RES["Resource<br/>(Pod, Secret, ConfigMap...)"]
+    ALLOW["Allow"]
+    DENY["Deny 403"]
+
+    S -->|"makes request"| API
+    API --> RB
+    RB --> R
+    R -->|"verb allowed?"| ALLOW
+    R -->|"verb not in rules"| DENY
+    ALLOW --> RES
+```
+
 ### Core objects
 
 | Object | Scope | Purpose |
@@ -312,6 +357,33 @@ kubectl get clusterrolebindings -o json | \
 ## Secrets Management with HashiCorp Vault
 
 HashiCorp Vault is a secrets management system that provides centralized, audited, time-limited access to credentials, API keys, certificates, and database passwords.
+
+The secrets sprawl problem is what motivates centralized secrets management. In most engineering organisations without a dedicated secrets manager, credentials accumulate in environment variables, `.env` files, Kubernetes Secrets, CI/CD variable stores, shell scripts, and configuration repositories — often duplicated across all of them. Each copy is a potential exposure vector, and when a credential needs rotating, every copy must be updated manually. This creates both a security risk (leaked credentials are hard to fully revoke) and an operational risk (one missed rotation breaks something in production).
+
+Dynamic secrets are Vault's most powerful feature and the most important conceptual shift from static credential management. Instead of storing a long-lived database password that gets distributed to twenty services, Vault's database secrets engine generates a unique credential on-demand for each requesting workload, with a short TTL (minutes to hours). The workload gets a credential it knows, Vault knows the credential exists, and when the TTL expires Vault automatically revokes it. If the credential leaks, its blast radius is limited to that TTL window. If the database is compromised, an attacker finds credentials that have already expired. This fundamentally changes the security model from "protect the password" to "limit how long any credential is valid."
+
+Vault auth methods determine how workloads and users prove their identity before receiving secrets. The Kubernetes auth method uses a pod's service account JWT to verify that a pod is genuinely running in a Kubernetes cluster with a specific service account — no static credentials needed for the auth step. The AWS IAM auth method uses the calling instance's IAM identity. AppRole is appropriate for CI/CD pipelines and legacy systems. Choosing the right auth method per use case means the secret retrieval itself relies on platform-managed identity rather than a shared password.
+
+```mermaid
+flowchart LR
+    POD["Pod<br/>(service account JWT)"]
+    AUTH["Vault Auth Method<br/>(Kubernetes auth)"]
+    POL["Vault Policy<br/>(HCL path ACL)"]
+    SE["Secret Engine<br/>(database / PKI / KV)"]
+    DYN["Dynamic Credential<br/>(unique, short TTL)"]
+    DB["Database<br/>(MySQL / Postgres)"]
+    POD2["Pod uses credential"]
+    REV["Vault revokes<br/>(on TTL expiry)"]
+
+    POD -->|"presents JWT"| AUTH
+    AUTH -->|"checks policy"| POL
+    POL -->|"grants access to"| SE
+    SE -->|"generates"| DYN
+    SE -->|"creates user in"| DB
+    DYN --> POD2
+    DYN -->|"after TTL"| REV
+    REV -->|"drops user from"| DB
+```
 
 ### Why not Kubernetes Secrets?
 
@@ -753,11 +825,41 @@ grype sbom:./sbom.cyclonedx.json
 cosign attest --predicate sbom.cyclonedx.json --type cyclonedx myapp:latest
 ```
 
+```mermaid
+flowchart LR
+    SRC["Source code<br/>(Git, signed commits)"]
+    CI3["CI build system<br/>(hosted, audited)"]
+    SBOM2["SBOM generated<br/>(Syft — CycloneDX / SPDX)"]
+    SCAN2["Vulnerability scan<br/>(Trivy / Grype)"]
+    SIGN["Image signed<br/>(cosign + Sigstore)"]
+    PROV["Provenance attestation<br/>(SLSA Level 2+)"]
+    REG2["Container registry<br/>(signed image + attestations)"]
+    ADM["Admission controller<br/>(Kyverno / Gatekeeper — verify signature)"]
+    DEPLOY["Deploy to cluster<br/>(only verified images)"]
+
+    SRC --> CI3
+    CI3 --> SBOM2
+    CI3 --> SCAN2
+    CI3 --> SIGN
+    CI3 --> PROV
+    SIGN --> REG2
+    PROV --> REG2
+    REG2 --> ADM
+    SCAN2 -->|"block on critical CVE"| ADM
+    ADM -->|"signature valid"| DEPLOY
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
 
 ## Container Security
+
+The Linux capabilities model is the foundation of container security hardening. By default, a process running as root inside a container has a large set of Linux capabilities — `CAP_NET_ADMIN`, `CAP_SYS_PTRACE`, `CAP_SYS_ADMIN`, and others — which, if exploited via a container escape vulnerability, can be used to affect the host kernel or other containers. `allowPrivilegeEscalation: false` prevents a process inside the container from acquiring more privileges than its parent, closing off a common attack path where an exploit runs a setuid binary to gain elevated capabilities. Running as a non-root user matters because many kernel exploits and container escape techniques require root; a process running as UID 1001 has no root capabilities to escalate from even if it achieves a container escape.
+
+The supply chain is where most container vulnerabilities enter. Base images, dependencies installed via package managers, and libraries pulled by build tools all carry CVEs. A container image built three months ago may have ten critical vulnerabilities that did not exist at build time. This is why image scanning cannot be a one-time gate at build: images need to be continuously rescanned against updated vulnerability databases and teams need a process for rebuilding and redeploying when new critical CVEs are published. Tools like Trivy and Grype integrate both into CI and as periodic scanners against a registry.
+
+The supply chain security concern extends beyond individual vulnerabilities to image authenticity. Sigstore's cosign tool allows image signatures to be attached to an OCI image manifest and stored in a transparency log. At deploy time, an admission controller like Kyverno or Gatekeeper can verify that the image was signed by a trusted CI system before allowing it to run. This closes the image substitution attack vector: even if an attacker gains write access to a registry, they cannot replace a signed image with a malicious one without invalidating the signature. The SLSA (Supply chain Levels for Software Artifacts) framework formalises these supply chain protections into levels — Level 1 (provenance), Level 2 (hosted build system), Level 3 (hardened build), Level 4 (two-party review and hermetic build) — giving teams a structured target to work toward.
 
 ### Dockerfile security best practices
 
@@ -874,6 +976,19 @@ cosign verify --key cosign.pub registry.example.com/myapp:1.2.3
 
 # Sign with GitHub OIDC (keyless — Sigstore)
 cosign sign registry.example.com/myapp:1.2.3  # Prompts OIDC login
+```
+
+```mermaid
+flowchart TD
+    SC["Supply Chain<br/>(signed image, SBOM, SLSA provenance)"]
+    IMG["Container Image<br/>(minimal base, no root, pinned deps)"]
+    RT["Container Runtime<br/>(seccomp, AppArmor, no privileged)"]
+    POD["Pod Security<br/>(non-root UID, drop ALL caps,<br/>readOnlyRootFilesystem)"]
+    NS["Namespace Policy<br/>(PSS restricted, NetworkPolicy)"]
+    RBAC2["RBAC<br/>(no cluster-admin for workloads)"]
+    FAL["Runtime Detection<br/>(Falco — behavioural alerts)"]
+
+    SC --> IMG --> RT --> POD --> NS --> RBAC2 --> FAL
 ```
 
 [↑ Back to TOC](#table-of-contents)

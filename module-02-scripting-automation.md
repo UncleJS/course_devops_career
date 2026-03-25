@@ -34,6 +34,20 @@ Scripting is the superpower that separates a manual operator from a DevOps engin
 
 This module covers Bash scripting from first principles, text processing with `awk` and `sed`, JSON processing with `jq`, scheduled automation with `cron`, Python for DevOps use cases, and production-grade scripting patterns including logging, secrets management, and idempotent execution.
 
+```mermaid
+flowchart LR
+    INVOKE(["Shell invocation<br/>./script.sh"])
+    SHEBANG["Shebang read<br/>#!/bin/bash"]
+    INTERP["Interpreter launched<br/>/bin/bash"]
+    EXEC["Script executes<br/>line by line"]
+    EXIT(["Exit code returned<br/>0 = success"])
+
+    INVOKE --> SHEBANG
+    SHEBANG --> INTERP
+    INTERP --> EXEC
+    EXEC --> EXIT
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -58,6 +72,24 @@ By the end of this module you will be able to:
 ## Beginner: Bash Scripting Basics
 
 Every Bash script starts with a **shebang** line that tells the system which interpreter to use.
+
+The shebang (`#!/bin/bash`) is not just a comment. When the kernel executes a file, it reads the first two bytes looking for `#!`. If found, it treats the rest of the line as the path to the interpreter and passes the script as an argument. This is why the same file can behave differently depending on whether you call `./script.sh` (uses the shebang) versus `bash script.sh` (explicitly uses Bash regardless of shebang). Getting this right matters when you write portable scripts that must work across environments where Bash lives in different locations — `#!/usr/bin/env bash` is more portable than a hardcoded path.
+
+`set -euo pipefail` is non-negotiable in production scripts. Without `set -e`, a failing command is silently ignored and the script continues — this is how automated deployments delete production databases while cheerfully reporting success. Without `set -u`, referencing an unset variable expands to an empty string, which causes bugs that are nearly impossible to reproduce in testing. Without `set -o pipefail`, the exit code of a pipeline is the exit code of the last command, so `false | true` returns 0 even though the first command failed. Together, these three options make scripts fail loudly and early, which is always better than failing silently and late.
+
+The distinction between a shell variable and an environment variable matters in automation. A variable you define with `NAME=value` is only visible to the current shell and its functions. A variable exported with `export NAME=value` is passed to child processes — programs and scripts you launch from within your script. This is why environment variables are the standard way to pass configuration into containers, CI/CD runners, and external tools. Unexported variables are invisible to everything you call, which is a common source of confusion when scripts work interactively but fail in cron or CI.
+
+```mermaid
+flowchart TD
+    PIPEFAIL["set -euo pipefail"]
+    PIPEFAIL --> E["set -e<br/>Exit on any command failure"]
+    PIPEFAIL --> U["set -u<br/>Error on unset variable reference"]
+    PIPEFAIL --> PF["set -o pipefail<br/>Pipe exit = first non-zero exit"]
+
+    E --> E1["false<br/>→ script exits immediately"]
+    U --> U1["echo $UNSET_VAR<br/>→ unbound variable error"]
+    PF --> PF1["false | true<br/>→ returns exit code 1"]
+```
 
 ```bash
 #!/bin/bash
@@ -453,6 +485,12 @@ require_args() {
 
 ## Intermediate: Error Handling & Exit Codes
 
+Exit codes are the contract between your script and everything that calls it. A zero exit code means success; any non-zero value means failure. CI/CD pipelines, monitoring systems, and orchestration tools all rely on exit codes to decide whether to proceed, retry, or alert. A script that always exits zero — even when it fails — is actively dangerous in automated pipelines because it silently masks failures while downstream systems proceed on the assumption that everything worked.
+
+`trap` is the mechanism for registering cleanup handlers that run when a script exits, regardless of how it exits. `trap cleanup EXIT` ensures your cleanup function runs whether the script completes normally, exits early due to `set -e`, or receives a signal. `trap on_error ERR` fires specifically when a command fails, giving you access to the line number and command that triggered the failure. Using both together — a general cleanup on `EXIT` and a specific error reporter on `ERR` — is the pattern that production scripts should follow. The lockfile pattern (`/tmp/script.lock`) prevents concurrent execution and should always be cleaned up in the `EXIT` trap.
+
+Lockfiles solve a critical concurrency problem in scheduled automation. Cron does not know whether the previous invocation of your script is still running. Without a lockfile, a slow script that takes 90 seconds will overlap with the next invocation when running every minute. Two simultaneous deployments, two simultaneous database backups, two simultaneous queue workers — these produce undefined and often destructive behavior. The lockfile pattern uses `mkdir` (atomic on Linux filesystems) or `flock` to ensure only one instance runs at a time. Always write the current PID into the lockfile so you can detect and clean up stale locks from crashed processes.
+
 ```bash
 #!/bin/bash
 set -euo pipefail
@@ -830,6 +868,23 @@ done
 
 `cron` runs commands on a schedule. Edit your crontab with `crontab -e`.
 
+The `crond` daemon reads crontab files from `/var/spool/cron/` (per-user) and `/etc/cron.d/` (system-wide) and spawns the specified commands at the scheduled times. A detail that catches many engineers off guard: cron runs each job in a minimal environment. The `PATH` is typically just `/usr/bin:/bin`, none of your shell profile files are sourced, and your working directory is your home directory. Scripts that work perfectly when run interactively often fail in cron because they depend on environment variables or `PATH` entries that your `~/.bashrc` normally provides. Always use absolute paths for commands and explicitly set any environment variables your script needs.
+
+By default, any output from a cron job (stdout and stderr) is mailed to the user who owns the crontab. On most servers there is no mail delivery configured, so this output is silently discarded or accumulates in a local mail spool nobody reads. In practice, you should always redirect output explicitly: redirect stdout and stderr to a log file, or to `/dev/null` if you truly do not care about it. Including timestamps in your log output is essential — cron jobs run without context, and a log line without a timestamp is nearly useless for debugging failures that happened at 3 AM.
+
+Systemd timers are a modern alternative to cron that addresses several of its limitations. Timer units are associated with service units, so you get the full power of systemd service management: proper logging via journald, dependency ordering, resource limits, and restart policies. Timers can trigger relative to when the last run completed (not just a wall-clock schedule), which prevents the overlap problem that lockfiles solve in cron. For new infrastructure on systemd-based systems, prefer systemd timers for critical scheduled work. Keep cron for simple, low-stakes jobs where the overhead of writing two unit files is not justified.
+
+```mermaid
+flowchart LR
+    SCHED["Crontab entry<br/>* * * * * command"]
+    SCHED --> MIN["Minute<br/>0-59"]
+    MIN --> HOUR["Hour<br/>0-23"]
+    HOUR --> DOM["Day of Month<br/>1-31"]
+    DOM --> MON["Month<br/>1-12"]
+    MON --> DOW["Day of Week<br/>0-7"]
+    DOW --> CMD(["Command executed<br/>in minimal environment"])
+```
+
 ### Crontab Format
 
 ```
@@ -1042,7 +1097,27 @@ with open('deployment.yaml', 'w') as f:
 
 ## Advanced: Production-Grade Bash Patterns
 
-### Structured Logging
+Idempotency is the most important property a production script can have. An idempotent script produces the same result whether it runs once or a hundred times. This property is what makes automated infrastructure safe to rerun after failures, safe to include in retry loops, and safe to apply in configuration management tools that converge state. The "check before act" principle implements idempotency at the operation level: before creating a directory, check if it exists; before adding a line to a config file, check if it is already there; before installing a package, check the installed version. Every operation in your script should be safe to repeat.
+
+Parallel execution multiplies script throughput but introduces accounting complexity. Bash's `wait` builtin combined with process arrays allows you to fan out work and collect results. The pattern is: launch all background jobs, capture their PIDs, then iterate over the PIDs waiting for each one and checking its exit code. Without this accounting, a background job failure is silently ignored — the job fails, the parent script continues, and you discover the problem in production. Job control with `wait -n` (wait for any single job to complete) and `jobs -l` (list with PIDs) gives you fine-grained control over parallel execution without external dependencies.
+
+Structured logging in production scripts is not optional. Raw `echo` output with no timestamps or severity levels is useless in a system where logs from multiple scripts and services are aggregated together. A minimal logging library — four functions for debug, info, warn, and error — adds ten lines to your script and saves hours of debugging. Emit to both a log file and stderr using `tee`, include timestamps in ISO 8601 format, and use consistent field ordering so log aggregators can parse your output reliably. When a 3 AM cron job fails, structured logs are the difference between a five-minute fix and a two-hour investigation.
+
+```mermaid
+flowchart LR
+    START(["Script invoked"])
+    CHECK{"State already<br/>at target?"}
+    ACT["Perform operation"]
+    VERIFY["Verify result"]
+    DONE(["Exit 0"])
+
+    START --> CHECK
+    CHECK -->|"yes"| DONE
+    CHECK -->|"no"| ACT
+    ACT --> VERIFY
+    VERIFY -->|"success"| DONE
+    VERIFY -->|"failure"| ACT
+```
 
 ```bash
 #!/bin/bash
@@ -1217,6 +1292,26 @@ wait    # Wait for remaining jobs
 ---
 
 ## Advanced: Scripting for Infrastructure
+
+```mermaid
+flowchart LR
+    PULL["Pull new image"]
+    BACKUP["Backup current deployment"]
+    DEPLOY["Write new version"]
+    RESTART["Restart service"]
+    HEALTH{"Health check<br/>passes?"}
+    SUCCESS(["Exit 0: success"])
+    ROLLBACK["Rollback to backup"]
+    FAIL(["Exit 1: failed"])
+
+    PULL --> BACKUP
+    BACKUP --> DEPLOY
+    DEPLOY --> RESTART
+    RESTART --> HEALTH
+    HEALTH -->|"yes"| SUCCESS
+    HEALTH -->|"no after retries"| ROLLBACK
+    ROLLBACK --> FAIL
+```
 
 ### Health Check Script
 

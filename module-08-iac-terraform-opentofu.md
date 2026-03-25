@@ -37,6 +37,20 @@ Infrastructure as Code (IaC) means defining your infrastructure — servers, net
 
 This module covers both tools — they share 99% of their syntax, and you can use either in practice.
 
+```mermaid
+flowchart LR
+    WRITE["Write HCL<br/>(.tf files)"]
+    GIT["git commit<br/>(code review)"]
+    INIT["terraform init<br/>(download providers)"]
+    PLAN["terraform plan<br/>(diff desired vs actual)"]
+    REVIEW["review plan output<br/>(human approval)"]
+    APPLY["terraform apply<br/>(make changes)"]
+    STATE["state updated<br/>(tfstate)"]
+    INFRA["infrastructure<br/>created / updated"]
+
+    WRITE --> GIT --> INIT --> PLAN --> REVIEW --> APPLY --> STATE --> INFRA
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -64,6 +78,8 @@ By the end of this module you will be able to:
 ## Beginner: What is IaC & Why It Matters
 
 Infrastructure as Code changes infrastructure from a sequence of human clicks into a system you can review, test, version, and repeat. That shift is what makes modern platform work scalable. A single engineer can click through a cloud console and get something working once, but a team cannot reliably operate production environments if the real source of truth lives in memory, screenshots, or tribal knowledge. IaC turns infrastructure into something that behaves more like application code: it can be peer-reviewed, promoted through environments, audited later, and recreated during an outage.
+
+The deeper conceptual shift is that infrastructure becomes a **dependency of your application code**, not a separate concern managed by a different team at a different pace. When infrastructure is code, a developer can open a pull request that changes both the application and the infrastructure it needs, have both reviewed together, and deploy them as a coordinated unit. That eliminates the traditional handoff delay where a developer finishes code and then waits for an operations ticket to provision the environment. It also eliminates environment drift: when staging and production are both defined by the same Terraform modules with different variable values, the gap between environments is explicit and deliberate rather than accidental and invisible.
 
 As you read the next two examples, notice that the real benefit is not just automation. It is predictability. IaC gives you a way to answer hard operational questions: what changed, who changed it, how do we rebuild it, and how do we know staging matches production closely enough to trust our releases. That is why Terraform and OpenTofu matter far beyond provisioning a single VM.
 
@@ -294,7 +310,28 @@ resource "aws_instance" "web" {
 
 The core workflow is where IaC becomes operational rather than theoretical. Every command in this loop has a different purpose: `init` prepares the project, `plan` shows intent, `apply` changes reality, and `destroy` tears it down when you are done. Strong teams treat `plan` as a review artifact, not as a formality. If you cannot explain a plan confidently, you are not ready to apply it.
 
-This is also the section where discipline starts to matter. Running `apply` impulsively in a shared environment is one of the fastest ways to break trust in IaC. A safer habit is: format first, validate early, plan carefully, then apply only when the diff matches your expectation. That rhythm becomes even more important once your configuration spans many modules, cloud accounts, and environments.
+`terraform plan` does more than show a diff. It reads the current state file to learn what Terraform believes already exists, queries the cloud provider APIs to get the real current attributes of each tracked resource, reads your configuration files to know the desired state, then computes a diff between desired and actual. That diff is what the plan shows you. The green plus signs, yellow tildes, and red minus signs each mean something specific: create, in-place update, and destroy respectively. A symbol of `-/+` (destroy and recreate) is the most dangerous output — it means Terraform cannot update the resource in-place and will delete it and create a replacement. Missing that symbol in a careless review is how production databases get accidentally deleted.
+
+The discipline of always reviewing plan output before applying is especially important in CI/CD. `terraform apply -auto-approve` is a valid tool in a pipeline, but it should be gated behind a plan review step, human approval for production, and ideally Sentinel or OPA policy checks that block plans containing forbidden resource types or destructive changes to protected resources. The automation does not remove the need for the review — it requires you to encode the review into the pipeline itself.
+
+```mermaid
+flowchart TD
+    HCL["Desired state<br/>(HCL configuration)"]
+    STATE["Actual state<br/>(terraform.tfstate)"]
+    CLOUD["Cloud provider APIs<br/>(real resource attributes)"]
+    PLAN["terraform plan<br/>(compute diff)"]
+    DIFF["Change plan<br/>(create / update / destroy)"]
+    APPLY["terraform apply<br/>(execute changes)"]
+    NEWSTATE["Updated state<br/>(new tfstate)"]
+
+    HCL --> PLAN
+    STATE --> PLAN
+    CLOUD --> PLAN
+    PLAN --> DIFF
+    DIFF --> APPLY
+    APPLY --> NEWSTATE
+    NEWSTATE --> STATE
+```
 
 ```bash
 # 1. Initialize — download providers and modules
@@ -433,6 +470,29 @@ resource "aws_instance" "web" {
 
 State is how Terraform/OpenTofu tracks what infrastructure exists. By default, it's stored in `terraform.tfstate` locally.
 
+State is the most critical and most dangerous part of working with Terraform. The state file is the source of truth for what Terraform believes it manages. It stores resource IDs, attribute values, dependency relationships, and metadata about every resource it created. When state is accurate, plans are accurate. When state is wrong — stale, modified manually, or corrupted — `terraform plan` will produce plans that are at best confusing and at worst destructive.
+
+The split-brain scenario is the key risk in teams. If two engineers both run `terraform apply` concurrently against the same state file, each one reads the state before the other's changes are written. The first apply finishes and writes updated state. The second apply then overwrites that state with a version that does not reflect the first set of changes. The result is state that no longer matches reality, with some resources existing in the cloud but absent from state (invisible to Terraform) and others described in state but already deleted by the first engineer. **State locking** prevents this: before any write operation, Terraform acquires a lock (via DynamoDB in AWS, a native lock in GCS, or a lease in Azure). A second concurrent apply blocks until the lock is released.
+
+If state is lost entirely — the S3 bucket deleted, the local file gone — you face `terraform import` for every resource. That is a painful, error-prone process for large configurations. The right prevention is: enable S3 versioning on your state bucket so deleted state can be recovered, enable access logging, restrict who can delete the bucket, and never store sensitive output values in plaintext state (use `sensitive = true` on outputs).
+
+```mermaid
+flowchart TD
+    ENGA["Engineer A<br/>(terraform apply)"]
+    ENGB["Engineer B<br/>(terraform apply)"]
+    S3["S3 backend<br/>(state storage)"]
+    LOCK["DynamoDB lock<br/>(LockID entry)"]
+    INFRA["Cloud infrastructure"]
+
+    ENGA -->|"acquire lock"| LOCK
+    LOCK -->|"lock granted"| ENGA
+    ENGA -->|"read + write state"| S3
+    ENGA -->|"create / update resources"| INFRA
+    ENGA -->|"release lock"| LOCK
+    ENGB -->|"acquire lock"| LOCK
+    LOCK -->|"lock held — BLOCKED"| ENGB
+```
+
 State is often the first truly dangerous concept in IaC because it is invisible until something goes wrong. The configuration files tell the tool what you want, but the state file tells it what it believes already exists. If that record is wrong, stale, or modified concurrently by multiple engineers, perfectly valid configuration can produce surprising and sometimes destructive results. That is why experienced teams talk about state with the same seriousness they use for databases, credentials, and backups.
 
 A reliable state strategy answers three questions: where is the state stored, how do you prevent concurrent writes, and how do you recover when someone imports, renames, or moves resources incorrectly. Remote backends with locking are not optional polish for serious work; they are the operational control that keeps collaborative IaC safe enough to use at scale.
@@ -489,6 +549,30 @@ terraform import aws_instance.web i-1234567890abcdef0
 ## Intermediate: Modules
 
 Modules are reusable packages of Terraform/OpenTofu configuration.
+
+Good module design follows a **single responsibility** principle: a module should own one coherent unit of infrastructure — a VPC, an ECS service, a database cluster — not a whole application stack in one file. When a module owns too much, it becomes hard to test, hard to reason about, and nearly impossible to reuse in a different context. The boundary of a module should match a real operational boundary: the thing you would describe as a named unit to a colleague.
+
+**Stable interfaces** are as important as scope. A module's `variables.tf` is its public API. If you keep renaming inputs or changing types, callers break and upgrades become painful. Good modules have a small number of required inputs, sensible defaults for optional ones, and clear output values that expose exactly what downstream modules or root configurations need. For community modules (from the Terraform or OpenTofu registry), **version pinning** is essential: `version = "~> 5.0"` means accept 5.x patch updates but not 6.0. Without pinning, a registry module update on Monday morning can change what `tofu plan` would create — exactly the kind of surprise you are trying to eliminate with IaC.
+
+```mermaid
+flowchart TD
+    ROOT["Root module<br/>(main.tf)"]
+    NET["Network module<br/>(VPC, subnets, routes)"]
+    COMP["Compute module<br/>(EC2, ASG, launch templates)"]
+    DB["Database module<br/>(RDS, security groups)"]
+    NOUT["outputs:<br/>vpc_id, subnet_ids"]
+    COUT["outputs:<br/>instance_ids, sg_id"]
+    DOUT["outputs:<br/>db_endpoint, db_sg"]
+
+    ROOT -->|"calls"| NET
+    ROOT -->|"calls"| COMP
+    ROOT -->|"calls"| DB
+    NET --> NOUT
+    COMP --> COUT
+    DB --> DOUT
+    NOUT -->|"vpc_id used by"| COMP
+    NOUT -->|"subnet_ids used by"| DB
+```
 
 Modules are where most teams either gain leverage or create long-term complexity. A well-designed module captures a repeated pattern such as a VPC, a database, or an application stack so engineers can reuse it consistently. A poorly designed module hides too much, exposes too many toggles, or bundles unrelated concerns together. The goal is not maximum abstraction. The goal is reusable clarity.
 
@@ -718,7 +802,28 @@ tofu providers lock
 
 By this point in the module, you have seen how individual configurations work. The next step is operating IaC across teams and environments without duplicating logic or losing control of state. That is where backend strategy and orchestration tools start to matter. Remote backends make shared state safer; Terragrunt and similar wrappers try to reduce repetition when many related stacks need the same conventions.
 
-The tradeoff is complexity. These patterns can improve consistency, but they also introduce another layer to understand during incidents and onboarding. Use them because they solve a real scale problem, not because they are fashionable. The best advanced setup is the one your team can still reason about at 2 a.m. during a failed deployment.
+The **DRY problem** in Terraform at scale is real. A standard S3 backend block is six to eight lines that must appear in every environment directory. Provider configuration, region, assume-role ARN, and common tagging logic repeat everywhere. When your organization has thirty modules across four environments, that repetition means backend configuration is maintained in 120 places — any one of which can fall out of sync. Terragrunt addresses this with an `include` pattern: a root `terragrunt.hcl` defines the canonical backend configuration using path interpolation, and leaf configurations inherit it without repetition.
+
+The tradeoff is that Terragrunt adds a tool to learn, a layer to debug, and implicit conventions that are invisible unless you know to look for them. The complexity is worth it when you have many environments and modules that genuinely share the same structure. It adds overhead when you have a small number of configurations that would be cleaner as separate directories with explicit backends. **Workspaces** are a simpler alternative when the configuration differences between environments are minor — the same module, slightly different variable values. But when environments differ in account boundaries, regions, compliance controls, or significant resource topology, separate directories with Terragrunt inheritance are usually the more honest model.
+
+```mermaid
+flowchart LR
+    ROOT["root terragrunt.hcl<br/>(backend config + provider)"]
+    PROD["prod/terragrunt.hcl<br/>(env overrides)"]
+    STAGING["staging/terragrunt.hcl<br/>(env overrides)"]
+    PWEB["prod/web/terragrunt.hcl<br/>(module instance)"]
+    PNET["prod/network/terragrunt.hcl<br/>(module instance)"]
+    SWEB["staging/web/terragrunt.hcl<br/>(module instance)"]
+    MOD["Terraform module<br/>(modules/web-tier)"]
+
+    ROOT -->|"inherited by"| PROD
+    ROOT -->|"inherited by"| STAGING
+    PROD -->|"inherited by"| PWEB
+    PROD -->|"inherited by"| PNET
+    STAGING -->|"inherited by"| SWEB
+    PWEB -->|"calls"| MOD
+    SWEB -->|"calls"| MOD
+```
 
 ### Remote State Backends
 

@@ -64,6 +64,30 @@ By the end of this module you will be able to:
 
 The OSI (Open Systems Interconnection) model is a conceptual framework describing how data moves across a network in 7 layers.
 
+The OSI model is primarily useful as a troubleshooting vocabulary, not as a literal description of how modern protocols are implemented. Real-world networking collapses several OSI layers — TCP/IP ignores layers 5 and 6 almost entirely. But the framework gives engineers a shared language for diagnosing failures: when a colleague says "this looks like a layer 3 problem," everyone immediately knows to look at routing and IP addressing rather than at application code or TLS certificates. That precision saves hours of unfocused debugging.
+
+Troubleshooting networks systematically means working from the bottom up. Start by confirming the physical and IP layers are functioning: can you `ping` the target? If not, is the route correct? Are firewall rules blocking ICMP? Once layer 3 is confirmed, move to layer 4: can you `nc -zv` the target port? A TCP connection refused means the host is reachable but nothing is listening. A timeout means firewall or routing is blocking the packet before it reaches the host. Only once you have confirmed transport connectivity should you start examining application behavior.
+
+Understanding which layer a protocol operates at predicts what can go wrong. HTTP/S, gRPC, and WebSocket are layer 7 — they depend on everything below them working correctly. TLS operates at the boundary of layers 6 and 7 — a certificate error is a TLS handshake failure that happens before any HTTP is exchanged. DNS is a layer 7 protocol that exists to support other layer 7 protocols. This layering explains why a valid HTTP request can fail due to a DNS misconfiguration, a routing loop, a dropped TCP SYN, a TLS version mismatch, or a misconfigured application — and why a methodical bottom-up approach is the only reliable diagnostic strategy.
+
+```mermaid
+flowchart TD
+    L7["Layer 7: Application<br/>HTTP, DNS, SSH, SMTP"]
+    L6["Layer 6: Presentation<br/>TLS/SSL, encoding, compression"]
+    L5["Layer 5: Session<br/>Sockets, session management"]
+    L4["Layer 4: Transport<br/>TCP, UDP — ports and delivery"]
+    L3["Layer 3: Network<br/>IP, ICMP — routing"]
+    L2["Layer 2: Data Link<br/>Ethernet, MAC — node-to-node"]
+    L1["Layer 1: Physical<br/>Cables, WiFi, fiber — raw bits"]
+
+    L7 --> L6
+    L6 --> L5
+    L5 --> L4
+    L4 --> L3
+    L3 --> L2
+    L2 --> L1
+```
+
 | Layer | Name | Examples | What it Does |
 |---|---|---|---|
 | 7 | Application | HTTP, DNS, SSH, FTP | User-facing protocols |
@@ -88,6 +112,29 @@ The OSI (Open Systems Interconnection) model is a conceptual framework describin
 ---
 
 ## Beginner: TCP/IP Fundamentals
+
+The 3-way handshake — SYN, SYN-ACK, ACK — is not just a protocol detail; it is the foundation of reliable communication. Before TCP transmits a single byte of data, it verifies that both sides are reachable, both have available buffer space, and both agree on initial sequence numbers. The sequence numbers are what make TCP reliable: every byte is numbered, every received byte is acknowledged, and any gap triggers retransmission. This reliability comes at a cost — at minimum, one round trip is required before data transfer begins, which is why HTTP/2 and QUIC invest so much engineering effort in reducing connection establishment overhead.
+
+`TIME_WAIT` is one of the most misunderstood TCP states. After a connection closes, the initiating side stays in `TIME_WAIT` for 2 × Maximum Segment Lifetime (typically 60–120 seconds). This is not a bug or a resource leak — it is a deliberate design that prevents a delayed packet from a previous connection being misinterpreted as belonging to a new connection on the same port. High-throughput servers that initiate many short-lived connections (HTTP health checks, database connections) accumulate thousands of `TIME_WAIT` sockets. This is normal. It becomes a problem only when you exhaust the local port range (`ip_local_port_range`), at which point new connections are refused.
+
+Understanding TCP connection teardown is important for debugging half-open connections and stuck processes. A clean close uses four steps: FIN from the initiator, ACK from the peer, FIN from the peer, ACK from the initiator. If one side closes but the other does not, you get `CLOSE_WAIT` on the passive side — a common symptom of a bug where a process fails to close a socket when its upstream connection closes. `ss -s` gives you a count of connections in each state; `CLOSE_WAIT` counts that grow over time indicate an application bug that will eventually exhaust file descriptors.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+    C->>S: SYN (seq=x)
+    S->>C: SYN-ACK (seq=y, ack=x+1)
+    C->>S: ACK (ack=y+1)
+    Note over C,S: Connection established
+    C->>S: DATA
+    S->>C: ACK
+    C->>S: FIN
+    S->>C: ACK
+    S->>C: FIN
+    C->>S: ACK
+    Note over C,S: Connection closed (C enters TIME_WAIT)
+```
 
 ### TCP vs UDP
 
@@ -195,6 +242,30 @@ IPv6 uses 128-bit addresses written in hexadecimal. Increasingly common in cloud
 ## Beginner: DNS
 
 DNS (Domain Name System) translates human-readable domain names into IP addresses.
+
+TTL (Time To Live) is the most operationally significant field in a DNS record, and it is consistently underestimated until a bad deploy makes it painfully obvious. TTL is the number of seconds that resolvers and clients are allowed to cache an answer. A TTL of 3600 means changes to your DNS records will not propagate to all clients for up to an hour after you make them. Before any DNS-dependent migration — changing IP addresses, moving to a new provider, cutover to a new load balancer — lower your TTL to 60 or 300 seconds at least one TTL period in advance. After the cutover, raise it back. Failing to do this is how planned maintenances turn into hour-long incidents.
+
+The distinction between authoritative and recursive resolvers is critical for debugging. An authoritative nameserver holds the actual DNS records for a domain and answers queries with `aa` (authoritative answer) set. A recursive resolver (like `8.8.8.8` or your ISP's resolver) does not hold records — it queries the DNS hierarchy on your behalf and caches the results. When `dig` returns stale data, you are seeing the recursive resolver's cache. To see the current authoritative answer, query the authoritative nameserver directly: `dig @ns1.example.com example.com`. A mismatch between what the authoritative nameserver says and what a recursive resolver returns indicates a caching or propagation delay.
+
+Negative caching (NXDOMAIN TTL) is the detail that bites engineers who make typos. When a DNS query returns NXDOMAIN (domain does not exist), that negative answer is also cached — typically for the duration of the SOA record's minimum TTL. If you query for `app.example.com` (typo), get NXDOMAIN, fix the typo and deploy `app.example.com`, but your resolver has cached the negative answer for the old name, you will still get NXDOMAIN for `app.example.com` until that cache expires. The fix is to flush your local resolver cache or query the authoritative nameserver directly to confirm the record exists.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant R as Recursive Resolver
+    participant ROOT as Root Nameserver
+    participant TLD as TLD Nameserver (.com)
+    participant AUTH as Authoritative NS (example.com)
+
+    C->>R: "What is the IP for app.example.com?"
+    R->>ROOT: Query app.example.com
+    ROOT->>R: "Ask the .com TLD server"
+    R->>TLD: Query app.example.com
+    TLD->>R: "Ask ns1.example.com"
+    R->>AUTH: Query app.example.com
+    AUTH->>R: "1.2.3.4 (TTL 300)"
+    R->>C: "1.2.3.4" (cached for 300s)
+```
 
 ### How DNS Resolution Works
 
@@ -455,6 +526,29 @@ table inet filter {
 ## Intermediate: Load Balancing
 
 A load balancer distributes incoming traffic across multiple servers to improve availability and performance.
+
+The practical difference between Layer 4 and Layer 7 load balancing matters for how you architect systems. A Layer 4 load balancer sees only IP addresses and port numbers — it forwards TCP streams without reading the content. This makes it extremely fast and capable of handling any TCP or UDP protocol without protocol-specific configuration. The tradeoff is inflexibility: you cannot route based on URL paths, HTTP headers, or cookies, and you cannot do SSL termination at the load balancer. Layer 7 load balancers parse HTTP, which enables path-based routing, header manipulation, cookie-based session affinity, and SSL termination. Nearly all modern web applications use Layer 7 load balancing.
+
+Health checks are not optional in production load balancing — they are the mechanism that makes high availability work. Without health checks, a load balancer continues sending traffic to a backend that is crashed, overloaded, or returning errors. The health check frequency (every 5–10 seconds is typical) and failure threshold (2–3 consecutive failures before removal) determine how quickly the load balancer reacts to failures. A 10-second interval with a 3-failure threshold means up to 30 seconds of errors before a bad backend is removed. For high-availability systems, tune these parameters to your acceptable error window, and ensure your health check endpoint tests actual service health — not just "the process is running."
+
+Graceful backend removal is a subtlety that many engineers miss. When a backend is removed from rotation — intentionally during a deployment or automatically due to a failed health check — in-flight requests on existing connections must be allowed to complete. Removing a backend by closing its connections immediately causes request errors for active users. The correct pattern is to stop sending new requests (remove from upstream pool), wait for a drain period (typically 30–60 seconds) for in-flight requests to complete, then terminate the backend. NGINX's `proxy_next_upstream` directive and AWS ALB's connection draining implement this; know how to configure it for your load balancer.
+
+```mermaid
+flowchart LR
+    CLIENT(["Client request"])
+    LB{"Load Balancer<br/>health-checked pool"}
+    B1["Backend 1<br/>healthy"]
+    B2["Backend 2<br/>healthy"]
+    B3["Backend 3<br/>unhealthy (removed)"]
+    RESP(["Response to client"])
+
+    CLIENT --> LB
+    LB -->|"round-robin"| B1
+    LB -->|"round-robin"| B2
+    LB -.->|"skipped"| B3
+    B1 --> RESP
+    B2 --> RESP
+```
 
 ### Load Balancing Algorithms
 
@@ -1465,6 +1559,33 @@ AWS Route 53 supports advanced DNS routing patterns:
 ### What is a Service Mesh?
 
 A **service mesh** is an infrastructure layer that handles service-to-service communication within a cluster. Instead of every application implementing retries, timeouts, circuit breaking, and mTLS itself, the mesh handles all of it transparently via sidecar proxies.
+
+The core problem a service mesh solves is that distributed systems fail in ways that monoliths do not. When service A calls service B, and service B is slow — not down, just slow — requests pile up in A's connection pool, A's latency increases, requests to A from service C begin to time out, and the slowness in one downstream service cascades into a system-wide failure. Circuit breaking, retry budgets, and timeout propagation are the reliability primitives that contain these failures. Implementing each one correctly in application code, across dozens of services written in different languages, is impractical. A service mesh puts these primitives into the sidecar proxy where they apply uniformly.
+
+Mutual TLS (mTLS) is the security primitive that service meshes make practical at scale. In a zero-trust network model, traffic between services within a cluster must be authenticated and encrypted — the network cannot be trusted. mTLS requires both sides of a connection to present and verify certificates, establishing that service A is who it claims to be before service B responds. Managing per-service certificates, handling rotation, and distributing a trusted CA without a service mesh requires significant PKI infrastructure. A mesh like Istio or Linkerd handles certificate issuance, rotation, and verification automatically, making zero-trust networking an operational default rather than a manual effort.
+
+The question of when a service mesh is premature versus necessary is important. A mesh adds real operational complexity: every service now has a sidecar that consumes memory (50–100 MB per pod), introduces latency on every call (0.5–5 ms typically), and requires operators to understand an additional control plane. For small deployments with a handful of services, application-level retries and TLS termination at the ingress are sufficient. Service meshes justify their cost when you have tens or hundreds of services, need observability across service boundaries, have strict security requirements for in-cluster traffic, or need fine-grained traffic control for canary releases and A/B testing.
+
+```mermaid
+flowchart TD
+    CP["Control Plane<br/>(Istiod / Linkerd Controller)"]
+    CP -->|"push config + certs"| PA["Sidecar Proxy A<br/>(Envoy)"]
+    CP -->|"push config + certs"| PB["Sidecar Proxy B<br/>(Envoy)"]
+
+    subgraph "Pod A"
+        APPA["App A"]
+        PA
+    end
+
+    subgraph "Pod B"
+        APPB["App B"]
+        PB
+    end
+
+    APPA -->|"localhost"| PA
+    PA -->|"mTLS + retries + tracing"| PB
+    PB -->|"localhost"| APPB
+```
 
 ```
 Without service mesh:

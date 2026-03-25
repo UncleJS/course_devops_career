@@ -75,7 +75,29 @@ By the end of this module, you will be able to:
 
 Observability is not just a collection of dashboards and tools. It is the discipline of making complex systems understandable while they are changing under real load. Traditional monitoring often tells you that something crossed a threshold. Observability goes further by helping you ask new questions during an incident: what changed, which users are affected, where the latency actually lives, and whether the problem is isolated or systemic. That is why modern teams talk about observability as a capability, not simply as a monitoring product.
 
+The distinction between monitoring and observability is worth stating precisely. Monitoring is the act of watching pre-defined signals against pre-defined thresholds. It works well when you can predict all the failure modes in advance. Observability is the property of a system that lets you understand its internal state from external outputs — even for failure modes you have never seen before. Systems become observable through high-cardinality metrics, structured logs, and distributed traces emitted with enough context to answer arbitrary questions. You do not buy observability from a vendor; you build it into the system from the start.
+
+SLIs, SLOs, and SLAs complete the picture by anchoring observability to business outcomes. An SLI (Service Level Indicator) is a specific metric that represents user experience — request success rate, latency at the 99th percentile, or data freshness. An SLO (Service Level Objective) is the target value for that SLI agreed upon by engineering and the business. An SLA (Service Level Agreement) is the contractual commitment made to customers, usually slightly less ambitious than the SLO so there is a buffer before penalties apply. When teams cannot agree on what to alert on, the question to ask is: which SLIs would a customer care about?
+
 The three pillars below are useful because each one answers a different operational question. Metrics tell you whether behavior is trending in a dangerous direction. Logs tell you which events occurred and what the software said at the time. Traces reveal how a single request moved through a distributed system. None of them is sufficient alone. The operational win comes from being able to move between them quickly during debugging and incident response.
+
+```mermaid
+flowchart TD
+    M["Metrics<br/>(Prometheus, Zabbix)"]
+    L["Logs<br/>(ELK, Loki)"]
+    T["Traces<br/>(Jaeger, Tempo, OTel)"]
+    A["Alerting<br/>(Alertmanager, Grafana)"]
+    D["Dashboards<br/>(Grafana)"]
+    I["Incident Response<br/>(PagerDuty, Runbooks)"]
+
+    M --> A
+    M --> D
+    L --> D
+    L --> A
+    T --> D
+    A --> I
+    D --> I
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -143,9 +165,31 @@ The key lesson here is that you should monitor from the perspective of the syste
 
 Prometheus became the default choice for many cloud-native teams because it fits the way modern systems expose information. Instead of pushing data into a central black box, services and exporters expose metrics over HTTP and Prometheus scrapes them on a schedule. That pull model gives teams a relatively simple, transparent way to understand what is being collected, how often it is collected, and how targets are discovered.
 
+The four metric types Prometheus defines are not interchangeable, and choosing the wrong one is a common source of broken dashboards. A **counter** only ever increases (or resets to zero on restart), which means querying it directly gives you a meaningless absolute number. You must use `rate()` or `increase()` to extract useful information. A **gauge** reflects the current state of something that can go up or down — memory usage, queue depth, active connections — and can usually be used directly. A **histogram** records observations in configurable buckets, which lets you compute approximate quantiles after the fact using `histogram_quantile()`. A **summary** computes quantiles client-side, which is efficient but means you cannot aggregate across instances in PromQL.
+
+Cardinality is the scaling concern that catches teams off guard. Every unique combination of metric name and label values creates a distinct time series stored in Prometheus's TSDB. A metric with 10 label dimensions where each has 10 possible values can generate 10 billion time series if all combinations appear. In practice, this typically happens with labels like `user_id`, `request_id`, or `ip_address` that should never be labels. High cardinality breaks ingestion performance, inflates storage, and makes queries slow. The rule is: only use labels whose cardinality is bounded and operationally meaningful.
+
 Its real power, though, comes from the ecosystem around it: exporters for common systems, PromQL for analysis, Alertmanager for routing, and Grafana for visualization. As you work through the sections below, think of Prometheus less as a dashboard backend and more as a measurement platform. It is the foundation that lets teams standardize metrics collection and turn raw counters into operational decisions.
 
 ### Prometheus Architecture
+
+```mermaid
+flowchart LR
+    A["Target: node_exporter<br/>:9100/metrics"]
+    B["Target: App<br/>/metrics endpoint"]
+    C["Target: cadvisor<br/>:8080/metrics"]
+    D["Prometheus Server<br/>(scrape + TSDB)"]
+    E["Alertmanager<br/>(route + deduplicate)"]
+    F["Grafana<br/>(dashboards + alerts)"]
+    G["PagerDuty / Slack<br/>(notifications)"]
+
+    A -->|"scrape every 15s"| D
+    B -->|"scrape every 15s"| D
+    C -->|"scrape every 15s"| D
+    D -->|"push firing alerts"| E
+    D -->|"PromQL queries"| F
+    E -->|"notify"| G
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -328,6 +372,12 @@ groups:
 
 PromQL (Prometheus Query Language) is a functional query language for time-series data.
 
+The Prometheus data model is worth understanding before writing queries. Every time series is uniquely identified by a metric name plus a set of label key-value pairs. For example, `http_requests_total{job="api", status="200", instance="web-01:8080"}` is one time series. Add or change any label and you get a different time series. PromQL queries operate over sets of these time series, and most operations — aggregation, filtering, joining — work by matching on label sets. When your queries produce unexpected results, the problem is almost always a label mismatch.
+
+The need for `rate()` and `increase()` instead of direct counter queries follows from how counters work. If you query `http_requests_total` directly, you see a monotonically increasing number that tells you almost nothing useful at a glance. `rate(http_requests_total[5m])` computes per-second average rate over the last five minutes, which is the number that belongs on a dashboard and in an alert expression. `increase()` gives the total increase over the window — useful for things like "how many errors occurred in the last hour." The reason teams new to Prometheus get wrong alerts is usually a counter used without `rate()` or `increase()`.
+
+Recording rules are an important performance tool once dashboards and alerts grow in complexity. They pre-compute expensive PromQL expressions on a schedule and store the result as a new time series. This means a dashboard that would otherwise run a heavy aggregation query on every page load instead reads from a fast pre-computed time series. Recording rules also let you version and test your most important queries like code, rather than leaving them embedded in dashboard JSON where they can drift silently.
+
 PromQL is what turns stored metrics into operational insight. Without a query language, metrics are just labeled numbers sitting in a time-series database. With PromQL, you can ask higher-level questions: what is the current error rate, which endpoints are driving latency, how fast is disk space disappearing, and what would happen if this trend continues for four more hours. Those are the questions on-call engineers and SREs actually need to answer.
 
 The most important habit in PromQL is matching the query to the meaning of the metric. Counters should usually be queried with functions like `rate()` or `increase()`, while gauges can often be used directly. When teams get noisy dashboards or misleading alerts, the problem is frequently not Prometheus itself but a query that ignored how the underlying metric behaves.
@@ -413,9 +463,33 @@ label_replace(
 
 Alertmanager handles deduplication, grouping, silencing, and routing of alerts fired by Prometheus.
 
+Alert fatigue is primarily an organisational failure, not a tooling problem. When alerts fire constantly, engineers stop trusting them, start ignoring them, or disable them — which means the next real incident arrives silently. The root cause is almost always alerts written to catch causes rather than symptoms. A disk filling at 80% may not matter if the system will scale storage before it hits 100%. An alert on a single high CPU spike may not matter if the load balancer already redistributed the traffic. Alerting on symptoms (latency is high, requests are failing, error budget is burning) keeps pages actionable and rare.
+
+The Four Golden Signals provide a practical framework for choosing what to alert on. **Latency** should be measured at the user-facing edge and alerted on percentile degradation, not averages. **Traffic** alerts tell you whether demand is normal or whether something upstream changed unexpectedly. **Errors** are typically the most direct indicator of user impact and should always be watched at low thresholds. **Saturation** — how close the system is to its capacity limits — is the leading indicator for problems that have not become visible yet. Together, these four signals cover most incident-level conditions for any service.
+
 Alerting is where observability either becomes operationally valuable or turns into fatigue. Prometheus can detect conditions, but Alertmanager decides how those detections reach humans. Grouping, routing, inhibition, and silencing are not optional extras. They are the controls that keep a minor outage from generating hundreds of duplicate pages or a known maintenance event from waking the wrong person at 3 a.m.
 
 Good alerting design reflects team structure and incident process. Critical alerts should page the people who can act immediately. Warning alerts may belong in chat or during business hours only. Suppression rules should prevent downstream symptom alerts from hiding the true root cause. The configuration below matters because it encodes those operational decisions into the alert flow itself.
+
+```mermaid
+flowchart TD
+    P["Prometheus<br/>(fires alert)"]
+    AM["Alertmanager<br/>(receives alert)"]
+    G["Group by alertname,<br/>cluster, service"]
+    R{"Route match?"}
+    PD["PagerDuty<br/>(severity: critical)"]
+    SL["Slack<br/>(severity: warning,<br/>business hours)"]
+    EM["Email<br/>(DB team alerts)"]
+    IN["Inhibit rules<br/>(suppress child alerts<br/>when host is down)"]
+
+    P --> AM
+    AM --> G
+    G --> IN
+    IN --> R
+    R -->|"critical"| PD
+    R -->|"warning"| SL
+    R -->|"DB alert"| EM
+```
 
 #### `alertmanager.yml`
 
@@ -584,7 +658,33 @@ modules:
 
 Grafana matters because raw metrics and alerts are rarely enough by themselves. Operators need a place to compare signals, build dashboards around service ownership, and move from detection into investigation quickly. Grafana provides that presentation layer, but its real value comes from how it links different data sources together. A useful dashboard helps a team answer not just "is the service broken?" but also "for whom, since when, and alongside which other symptoms?"
 
+The USE method (Utilization, Saturation, Errors) and RED method (Rate, Errors, Duration) are design frameworks that prevent dashboards from becoming collections of arbitrary panels. USE is best suited to infrastructure resources — nodes, disks, network interfaces — where you want to understand capacity and failure modes. RED is suited to user-facing services and APIs, where you want to understand throughput, reliability, and latency distribution. A well-designed monitoring setup has both: a USE-oriented infrastructure overview and RED-oriented service dashboards for each team's critical workloads.
+
+Dashboard storytelling matters for operational effectiveness. The best dashboards are structured in layers: a top-level overview that shows whether anything is wrong, service-level dashboards that reveal which component is degraded, and component-level panels that give the diagnostic detail needed to fix it. An engineer picking up an on-call shift should be able to start at the top and drill down in under two minutes. Dashboards that require deep knowledge of the system to interpret fail this test — and they fail precisely when they are needed most, during incidents with unfamiliar engineers on call.
+
 That is why good dashboard design is a reliability practice, not just a reporting exercise. Clear dashboards reduce cognitive load during incidents, support handoffs between engineers, and make trends visible before they turn into pages. The sections below focus on provisioning and panel patterns because the best dashboards are usually treated as code and improved iteratively, not built once in a UI and forgotten.
+
+```mermaid
+flowchart LR
+    DS1["Prometheus<br/>(metrics)"]
+    DS2["Loki<br/>(logs)"]
+    DS3["Alertmanager<br/>(alert state)"]
+    GR["Grafana<br/>(query engine + renderer)"]
+    P1["Dashboards<br/>(panels, variables)"]
+    P2["Alerts<br/>(unified alerting)"]
+    P3["Explore<br/>(ad-hoc queries)"]
+    U["Engineer / On-call"]
+
+    DS1 -->|"PromQL"| GR
+    DS2 -->|"LogQL"| GR
+    DS3 -->|"REST API"| GR
+    GR --> P1
+    GR --> P2
+    GR --> P3
+    P1 --> U
+    P2 --> U
+    P3 --> U
+```
 
 ### Grafana Installation & Data Sources
 
@@ -1422,6 +1522,26 @@ spec:
 Metrics become strategically useful when they are tied to reliability goals the business actually cares about. SLIs, SLOs, and error budgets provide that bridge. They convert abstract telemetry into a contract about user experience: how often the service should succeed, how fast it should respond, and how much failure is acceptable before reliability work should take priority over feature work.
 
 This framing changes the conversation during planning and incidents. Instead of debating whether a problem "feels bad," teams can ask whether they are burning their budget too quickly and whether a release should pause until reliability improves. The operational value of SLOs is not the math by itself; it is the clarity they bring to tradeoffs between speed and stability.
+
+The monitoring coverage model below shows how infrastructure metrics connect upward to SLIs, which inform SLOs, which determine how much error budget exists. Burn rate alerts at the bottom are the practical mechanism that turns an SLO into an action: when budget burns too fast relative to the SLO window, pages fire before the SLO is actually violated. This is far more useful than alerting only when the SLO has already been breached.
+
+```mermaid
+flowchart TD
+    IM["Infrastructure Metrics<br/>(CPU, memory, disk, network)"]
+    AM["Application Metrics<br/>(request rate, error rate, latency)"]
+    SLI["SLIs<br/>(HTTP success rate, p99 latency)"]
+    SLO["SLO<br/>(99.9% success over 30 days)"]
+    EB["Error Budget<br/>(0.1% = 43.2 min/month)"]
+    BR["Burn Rate Alerts<br/>(14.4x = budget gone in 2 days)"]
+    ACT["Action:<br/>pause releases, reliability work"]
+
+    IM --> SLI
+    AM --> SLI
+    SLI --> SLO
+    SLO --> EB
+    EB --> BR
+    BR --> ACT
+```
 
 ### Definitions
 

@@ -36,6 +36,31 @@ Cloud computing is the backbone of modern DevOps. Instead of buying and managing
 
 This module is cloud-agnostic: we cover concepts that apply across all providers, then show the equivalent service in AWS, Azure, and GCP side-by-side.
 
+```mermaid
+flowchart TD
+    subgraph "Provider Responsibility"
+        PHYS["Physical hardware<br/>(data centers, servers, networking)"]
+        HV["Hypervisor / virtualization layer"]
+        NETHW["Network hardware<br/>(switches, routers, cables)"]
+    end
+    subgraph "Shared Responsibility"
+        NETCTRL["Network controls<br/>(firewalls, routing)"]
+        ENC["Encryption<br/>(at rest and in transit)"]
+    end
+    subgraph "Customer Responsibility"
+        OS["Operating System<br/>(patching, hardening)"]
+        APPS["Applications<br/>(code, dependencies)"]
+        DATA["Data<br/>(classification, protection)"]
+        IAM["IAM<br/>(access control, credentials)"]
+    end
+    PHYS --> HV --> NETHW
+    NETHW --> NETCTRL
+    NETCTRL --> OS
+    OS --> APPS
+    APPS --> DATA
+    IAM --> DATA
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -63,6 +88,12 @@ By the end of this module you will be able to:
 ---
 
 ## Beginner: Cloud Computing Concepts
+
+Cloud computing represents a fundamental shift in how teams think about infrastructure. The traditional model required capacity planning: you estimated peak demand, bought hardware to cover it, and then watched that hardware sit mostly idle during off-peak hours while you still paid for it. If you underestimated, you had an outage. If you overestimated, you wasted capital. Either way, the decision had to be made weeks or months before the traffic arrived.
+
+The cloud model replaces that constraint with elastic provisioning. You request compute capacity when you need it and release it when you do not. A web application can scale from two instances to two hundred in minutes and scale back down overnight when traffic drops — paying only for what it actually used. That operational model changes how teams think about availability: instead of guarding a fixed pool of servers, you design systems that assume individual components are disposable and build resilience through redundancy and automation.
+
+This shift also changes how cost and risk interact. In the traditional model, infrastructure investment came first and capacity determined what applications could do. In the cloud model, infrastructure spending follows demand and can be tuned incrementally. That changes the conversation between engineering and finance, enables faster experiments, and removes the organizational excuse of "we do not have enough servers" as a barrier to trying something new.
 
 ### Why Cloud?
 
@@ -96,6 +127,28 @@ By the end of this module you will be able to:
 | **SaaS** (Software as a Service) | Your data only | Everything | Gmail, Salesforce, GitHub |
 | **FaaS** (Functions as a Service) | Code only | Everything else | AWS Lambda, Azure Functions, GCP Cloud Functions |
 | **CaaS** (Containers as a Service) | Containers | Orchestration, infrastructure | EKS, AKS, GKE |
+
+```mermaid
+flowchart TD
+    subgraph "Stack layers"
+        PHY["Physical / Data Center"]
+        VIRT["Virtualization"]
+        NET["Networking"]
+        OS["Operating System"]
+        RT["Runtime / Middleware"]
+        APP["Application Code"]
+        DAT["Data"]
+    end
+    PHY --> VIRT --> NET --> OS --> RT --> APP --> DAT
+
+    IAAS["IaaS<br/>You manage: OS → Data"]
+    PAAS["PaaS<br/>You manage: App → Data"]
+    FAAS["FaaS / SaaS<br/>You manage: Data (or less)"]
+
+    OS -.->|"customer boundary"| IAAS
+    APP -.->|"customer boundary"| PAAS
+    DAT -.->|"customer boundary"| FAAS
+```
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -253,6 +306,41 @@ gsutil rm gs://my-bucket/file.txt
 
 ## Intermediate: Networking in the Cloud
 
+A VPC (Virtual Private Cloud) is a software-defined network you own within a cloud provider's infrastructure. The provider's physical network is shared, but your VPC gives you isolated address space, routing, and firewall rules. Think of it as your data center's network — except it is defined through API calls and JSON, not by physically plugging in cables.
+
+The public/private subnet separation is the foundational security pattern for cloud architecture. Resources in a **public subnet** have a route to an internet gateway and can receive inbound traffic from the internet. Resources in a **private subnet** have no such route — they are unreachable from the internet directly. Application servers and databases belong in private subnets. Load balancers and bastion hosts belong in public subnets. This arrangement means that even if an application is compromised, it is harder for an attacker to pivot outward because the application layer cannot directly communicate with arbitrary internet destinations.
+
+A **NAT Gateway** (or NAT instance) provides the important exception: outbound-only internet access from private subnets. Application servers in private subnets need to pull software updates, reach external APIs, and download container images — but they should not be reachable from the outside. The NAT gateway sits in a public subnet, holds an Elastic IP, and performs network address translation so that responses to outbound connections are delivered correctly while no unsolicited inbound connection can reach the private subnet. This pattern is ubiquitous in production cloud architecture.
+
+```mermaid
+flowchart TD
+    INET["Internet"]
+    IGW["Internet Gateway"]
+    subgraph "Public Subnet"
+        BASTION["Bastion Host<br/>(SSH jump server)"]
+        NAT["NAT Gateway<br/>(+ Elastic IP)"]
+        ALB["Application<br/>Load Balancer"]
+    end
+    subgraph "Private Subnet"
+        APP1["App Server 1"]
+        APP2["App Server 2"]
+    end
+    subgraph "Database Subnet"
+        DB["RDS / Database<br/>(no internet route)"]
+    end
+
+    INET --> IGW
+    IGW --> BASTION
+    IGW --> ALB
+    ALB -->|"routes traffic"| APP1
+    ALB -->|"routes traffic"| APP2
+    APP1 -->|"outbound only"| NAT
+    APP2 -->|"outbound only"| NAT
+    NAT --> IGW
+    APP1 --> DB
+    APP2 --> DB
+```
+
 ### VPC Concepts
 
 A VPC (Virtual Private Cloud) is your isolated private network in the cloud.
@@ -296,6 +384,33 @@ gcloud compute firewall-rules create allow-http \
 ---
 
 ## Intermediate: Identity & Access Management (IAM)
+
+IAM is the authorization system that determines who can do what to which cloud resources. Getting IAM right is one of the most impactful security decisions in a cloud environment, because IAM misconfiguration is consistently one of the top causes of cloud security incidents.
+
+The **principle of least privilege** means granting only the permissions that are actually needed, on only the resources they apply to, for only the time period required. In practice, this means avoiding wildcard actions (`*`), scoping resources explicitly rather than using `*` in the Resource field, and preferring time-limited or role-based access over long-lived credentials. **Instance profiles** (AWS) and **managed identities** (Azure) are the right mechanism for giving applications access to cloud services: they deliver short-lived credentials automatically without any secret to store, rotate, or accidentally commit to Git.
+
+IAM **policy evaluation** follows a strict precedence order that matters operationally. An explicit **Deny** in any policy overrides any number of Allow statements — it wins unconditionally. Without any matching policy, access is **denied by default** (the implicit deny). An explicit **Allow** permits access only when no Deny statement applies. Understanding this order prevents a common confusion: adding an Allow policy to a user and being surprised that they still cannot do something because a Service Control Policy (SCP) or permission boundary contains an explicit Deny for that action. When debugging IAM access problems, start by looking for explicit denies before assuming allows are missing.
+
+```mermaid
+flowchart LR
+    PRINC["Principal<br/>(user / role / service)"]
+    AUTHN["Authentication<br/>(credentials check)"]
+    EVAL["Policy evaluation"]
+    DENY["Explicit Deny?"]
+    ALLOW["Explicit Allow?"]
+    BLOCK["Access Denied"]
+    GRANT["Access Granted"]
+    RES["Resource"]
+
+    PRINC --> AUTHN
+    AUTHN --> EVAL
+    EVAL --> DENY
+    DENY -->|"yes"| BLOCK
+    DENY -->|"no"| ALLOW
+    ALLOW -->|"yes"| GRANT
+    ALLOW -->|"no (implicit deny)"| BLOCK
+    GRANT --> RES
+```
 
 IAM controls **who** can do **what** on **which resources**.
 
@@ -487,6 +602,12 @@ gcloud billing accounts list
 
 Serverless (FaaS) lets you run code without provisioning or managing servers. You pay only for execution time — billed in milliseconds.
 
+Serverless changes the unit of deployment from a long-running process to a function invocation. The cloud provider handles everything below your code: hardware provisioning, OS patching, runtime version management, and scaling to zero when there are no invocations. That operational simplicity is the genuine appeal — a team can deploy business logic without thinking about servers, containers, or scaling policies at all.
+
+The **cold start problem** is the main operational tradeoff. When a function has not been invoked recently, the provider must initialize a new execution environment: pull the runtime, load the function code, and run initialization logic. This can add hundreds of milliseconds to the first invocation — which is usually acceptable for asynchronous workloads but noticeable for user-facing APIs. Provisioned concurrency (AWS) and minimum instances (GCP/Azure) pre-warm execution environments at a cost to eliminate cold starts for latency-sensitive paths.
+
+The **event-driven model** is where serverless fits best and where it changes how you think about architecture. A file upload to S3 triggers a function. A message arriving in a queue triggers a function. A database change triggers a function. This push-based model is different from polling and long-running services, and it is genuinely simpler for event-processing workloads. Where serverless adds complexity rather than removing it is for long-running jobs (functions have maximum execution time limits), stateful workloads, functions with large dependencies, or services that need warm connections to databases. For those patterns, containers usually win.
+
 ### AWS Lambda
 
 ```bash
@@ -594,6 +715,25 @@ gcloud functions call hello --data '{"name": "DevOps"}' --region us-central1
 
 Auto Scaling automatically adjusts compute capacity based on demand — scaling out under load and scaling in when idle.
 
+```mermaid
+flowchart LR
+    CW["CloudWatch<br/>(metrics + alarms)"]
+    ALARM["Alarm threshold<br/>triggered"]
+    POL["Auto Scaling Policy<br/>(target tracking)"]
+    DEC["scale up or<br/>scale down?"]
+    LAUNCH["Launch new instance<br/>from launch template"]
+    TERM["Terminate instance<br/>(oldest / closest to billing hour)"]
+    TG["Target Group<br/>(register / deregister instance)"]
+
+    CW -->|"metric crosses threshold"| ALARM
+    ALARM --> POL
+    POL --> DEC
+    DEC -->|"above target"| LAUNCH
+    DEC -->|"below target"| TERM
+    LAUNCH --> TG
+    TERM --> TG
+```
+
 ### AWS Auto Scaling Groups (ASG)
 
 ```bash
@@ -678,6 +818,10 @@ gcloud compute instance-groups managed set-autoscaling web-mig \
 ### NAT Gateway — outbound internet for private subnets
 
 Private subnets (where your app servers and databases live) have no direct internet access. A **NAT Gateway** in the public subnet allows outbound traffic while blocking inbound connections.
+
+As VPCs multiply across accounts and regions, connecting them requires choosing the right mechanism. **VPC peering** is a direct, low-latency connection between two VPCs — it is simple and cheap for a small number of pairs. The scaling problem is that peering is not transitive: if VPC A peers with VPC B and VPC B peers with VPC C, VPC A cannot reach VPC C through that chain. With dozens of VPCs, the number of peering connections grows quadratically and becomes unmanageable. **Transit Gateway** solves this by acting as a hub: every VPC connects to the Transit Gateway once, and routing between any two VPCs is handled through the hub. This adds a fixed cost and a hop, but it is far more operable at scale.
+
+**Private endpoints** (VPC Endpoints in AWS, Private Service Connect in GCP) keep traffic to cloud services entirely within the provider's backbone network without traversing the public internet. Without a private endpoint, your application servers in a private subnet accessing S3 have traffic leave the VPC via the NAT gateway and travel over the public internet — exposing metadata about your data flows and costing NAT gateway data-processing fees. A gateway endpoint for S3 or DynamoDB adds a route directly in the route table at no charge. Interface endpoints for other services (Secrets Manager, ECR, KMS) provision an elastic network interface in your subnet so DNS for the service resolves to a private IP. In regulated environments, private endpoints are often mandatory for compliance — data in transit must never touch the public internet.
 
 ```bash
 # AWS — create a NAT Gateway

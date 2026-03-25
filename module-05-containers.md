@@ -79,10 +79,49 @@ By the end of this module you will be able to:
 
 ### How Containers Work
 
-Containers use two core Linux kernel features:
+Containers use two core Linux kernel features to provide isolation without a full virtual machine:
 
 - **Namespaces** — isolate: PID, network, filesystem, users, hostname
 - **cgroups (Control Groups)** — limit: CPU, memory, disk I/O
+
+Namespaces are the kernel mechanism that makes containers feel like isolated systems. There are seven namespace types: PID (a container has its own process tree starting at PID 1), network (its own network interfaces and routing table), mount (its own filesystem view), UTS (its own hostname), IPC (its own inter-process communication), user (its own UID/GID mappings, enabling rootless containers), and cgroup (its own cgroup hierarchy). Each namespace type is independent — a container gets all of them simultaneously, which is what produces the illusion of an isolated operating environment while sharing the host kernel.
+
+cgroups (control groups) provide the resource accounting and enforcement that namespaces do not. Namespaces provide isolation — processes in one container cannot see processes in another. cgroups provide limits — a container consuming 100% of available CPU or memory can be constrained or killed. cgroup v2 (the current version) provides a unified hierarchy where memory limits, CPU shares, I/O throttling, and process counts are all managed through the same tree at `/sys/fs/cgroup/`. Container runtimes like runc (which Docker and Podman both use) write cgroup configuration files before starting the container process. Without cgroups, a single misbehaving container could starve all others on the host.
+
+The important conceptual distinction between containers and VMs is where isolation occurs. A VM includes a full operating system kernel, hardware emulation, and device drivers — it is a complete independent OS running on top of a hypervisor. A container is a set of isolated processes on the host OS; the host kernel is shared. This means containers start in milliseconds (no kernel boot), occupy megabytes (no OS image overhead), and can be packed more densely on a host. It also means a kernel vulnerability can affect all containers on a host simultaneously — defense-in-depth (seccomp profiles, AppArmor, rootless execution) is essential.
+
+```mermaid
+flowchart TD
+    subgraph "Virtual Machine Stack"
+        VMAPP1["App A"]
+        VMAPP2["App B"]
+        VMOS1["Guest OS"]
+        VMOS2["Guest OS"]
+        HYPERV["Hypervisor"]
+        VMHOST["Host OS + Hardware"]
+        VMAPP1 --> VMOS1
+        VMAPP2 --> VMOS2
+        VMOS1 --> HYPERV
+        VMOS2 --> HYPERV
+        HYPERV --> VMHOST
+    end
+
+    subgraph "Container Stack"
+        CAPP1["App A"]
+        CAPP2["App B"]
+        CNS1["Namespaces + cgroups"]
+        CNS2["Namespaces + cgroups"]
+        CRUNTIME["Container Runtime (runc)"]
+        CKERNEL["Host OS Kernel"]
+        CHARDWARE["Hardware"]
+        CAPP1 --> CNS1
+        CAPP2 --> CNS2
+        CNS1 --> CRUNTIME
+        CNS2 --> CRUNTIME
+        CRUNTIME --> CKERNEL
+        CKERNEL --> CHARDWARE
+    end
+```
 
 ```
 Host OS Kernel
@@ -169,6 +208,28 @@ sudo dnf install -y podman podman-compose
 ---
 
 ## Beginner: Images & Containers
+
+A container image is a stack of read-only layers, each representing the filesystem changes introduced by one Dockerfile instruction. When you run a container, a thin writable layer is added on top of these read-only layers. The container reads from all layers beneath it but writes only to the top layer. When the container is removed, the writable layer is discarded; the underlying image layers are unchanged and shared across all containers running from the same image.
+
+The layer model is what makes image distribution efficient. When you push or pull an image, only the layers that do not already exist at the destination are transferred. If you have ten containers running from the same base image, that base image's layers are stored exactly once on disk and in memory, regardless of how many containers reference them. This is also why the order of instructions in a Dockerfile matters for build performance: layers are cached and reused from previous builds as long as the instruction and its inputs have not changed. A single changed instruction invalidates all cache layers below it.
+
+Content addressing is the mechanism that makes image digests reliable. Every layer is identified by the SHA-256 hash of its compressed tar archive. The image manifest is identified by the SHA-256 hash of its JSON descriptor. This means an image pulled by digest (`nginx@sha256:abc123...`) is cryptographically guaranteed to be bit-for-bit identical to what was pushed. Images pulled by tag (`nginx:1.25`) can change if someone pushes a new image to the same tag — pinning by digest in production is the only way to ensure reproducibility.
+
+```mermaid
+flowchart TD
+    BASE["Base layer<br/>FROM ubuntu:24.04"]
+    DEPS["Deps layer<br/>RUN apt-get install"]
+    APP["App layer<br/>COPY app/ ."]
+    CFG["Config layer<br/>RUN configure.sh"]
+    READONLY["Read-only image layers (shared)"]
+    WRITE["Writable layer<br/>(per container, ephemeral)"]
+
+    BASE --> DEPS
+    DEPS --> APP
+    APP --> CFG
+    CFG --> READONLY
+    READONLY --> WRITE
+```
 
 ### The Container Lifecycle
 
@@ -261,6 +322,30 @@ podman inspect webserver
 
 Podman uses the identical `Containerfile` format (can also use `Dockerfile` — same thing).
 
+Layer caching is the most important performance concept for Dockerfile authors. Every instruction in a Dockerfile creates a new layer. Docker and Podman cache these layers and reuse them on subsequent builds if the instruction has not changed. Cache invalidation is sequential: once any instruction's cache is invalidated (because the instruction changed, or because a file it `COPY`s changed), all subsequent instructions are also invalidated and must be rebuilt. This is the reasoning behind "copy dependency manifests first, then install, then copy application code." The `package.json` and `requirements.txt` files change far less frequently than application source code, so placing them in earlier layers preserves the cache for the slow dependency installation step even when application code changes.
+
+The instruction ordering rule is: put things that change least frequently at the top of the Dockerfile, and things that change most frequently at the bottom. Base image selection rarely changes; system package installation changes occasionally; dependency manifests change sometimes; application source code changes constantly. A Dockerfile that `COPY . .` before `RUN npm install` busts the dependency installation cache on every code change, rebuilding node_modules from scratch on every build. A Dockerfile that copies `package.json` first, runs `npm install`, then copies the source code preserves the npm install cache across code changes, reducing build time from minutes to seconds.
+
+Multi-stage builds are the standard pattern for keeping final images small. The build stage uses a full SDK image with compilers, build tools, and development dependencies. The final stage starts from a minimal base image (distroless, Alpine, or `scratch`) and copies only the compiled artifacts from the build stage. The build tools, package managers, and intermediate files never appear in the final image. This matters for security as well as size: every extra package in a production image is an additional attack surface.
+
+```mermaid
+flowchart LR
+    SRC["Source code +<br/>Dockerfile"]
+    PARSE["Parse Dockerfile<br/>instructions"]
+    CACHE{"Layer cache<br/>hit?"}
+    EXEC["Execute instruction<br/>create new layer"]
+    REUSE["Reuse cached layer"]
+    IMAGE["Final image<br/>(tagged + pushed)"]
+
+    SRC --> PARSE
+    PARSE --> CACHE
+    CACHE -->|"miss"| EXEC
+    CACHE -->|"hit"| REUSE
+    EXEC --> CACHE
+    REUSE --> CACHE
+    EXEC -->|"last instruction"| IMAGE
+```
+
 ### Anatomy of a Dockerfile
 
 ```dockerfile
@@ -339,6 +424,30 @@ CMD ["./server"]
 ---
 
 ## Beginner: Container Networking
+
+Container networking is built on Linux virtual network devices. When you create a Docker or Podman bridge network, the runtime creates a Linux bridge interface on the host (typically named `docker0` or `podman0`). Each container connected to that network gets a pair of virtual Ethernet interfaces (veth pair): one end lives inside the container's network namespace (visible as `eth0`), and the other end is attached to the bridge on the host. The bridge forwards traffic between all attached veth pairs, and a host-side iptables/nftables rule provides NAT for outbound internet access.
+
+Two containers on the same custom network can communicate using container names as hostnames because Docker and Podman embed a DNS resolver that maps container names to their internal IP addresses. This DNS resolution only works within the same network — containers on different networks are isolated by default and cannot communicate without explicit network configuration or port mapping. The default bridge network (`bridge`/`docker0`) does not provide DNS-based name resolution; this is why the documentation consistently recommends creating custom user-defined networks for multi-container applications.
+
+Port mapping (`-p 8080:80`) works through iptables DNAT rules written by the container runtime. When a packet arrives on the host's port 8080, the kernel's netfilter rewrites the destination to the container's internal IP and port 80, forwarding it into the container's network namespace. The container sees the connection as arriving on its own port 80 and has no awareness of the host's port 8080 or the NAT that occurred. This is transparent to the application, which is the point — the same container image can be published on any host port without modification.
+
+```mermaid
+flowchart TD
+    INET["Internet / Host network"]
+    BRIDGE["Bridge interface<br/>(docker0 / podman0)"]
+    VETH1["veth pair<br/>Container A"]
+    VETH2["veth pair<br/>Container B"]
+    CA["Container A<br/>eth0: 172.17.0.2"]
+    CB["Container B<br/>eth0: 172.17.0.3"]
+    NAT["iptables NAT<br/>(port mapping)"]
+
+    INET --> NAT
+    NAT --> BRIDGE
+    BRIDGE --> VETH1
+    BRIDGE --> VETH2
+    VETH1 --> CA
+    VETH2 --> CB
+```
 
 ### Docker Network Types
 
@@ -752,6 +861,27 @@ podman pull ghcr.io/uncleJS/myapp:1.0
 
 Rootless Podman runs entirely as a regular user — no root, no daemon, dramatically smaller attack surface. Understanding *why* this is secure requires a look at Linux user namespaces.
 
+User namespace remapping is the kernel mechanism that makes rootless containers possible. When Podman creates a container as an unprivileged user, it requests a user namespace from the kernel. Inside that namespace, UIDs are remapped: UID 0 inside the container maps to your actual unprivileged UID on the host (typically 1000+). The kernel enforces this remapping at the syscall boundary — when the container process calls `setuid(0)` or attempts a privileged operation, the kernel checks the effective UID outside the namespace, not inside it. The container process has no more privilege on the host than the user who started it.
+
+The `/etc/subuid` and `/etc/subgid` files define the UID/GID range that each user is allowed to use inside user namespaces. A typical entry `alice:100000:65536` means alice can map UIDs 100000–165535 into container user namespaces. Files created inside the container by UID 0 appear on the host as owned by UID 100000 (alice's first mapped UID), not by root. This is visible in `ls -la` on any named volume used by a rootless container — you will see high UIDs rather than 0. Understanding this mapping is essential when debugging permission errors in rootless containers.
+
+Rootless containers cannot acquire Linux capabilities that require real root privileges. A rootless container cannot bind to ports below 1024 on the host (though it can inside its own network namespace), cannot load kernel modules, cannot create raw sockets, and cannot modify host network configuration. For most application workloads, none of these restrictions matter. For workloads that genuinely need these capabilities — network monitoring tools, custom VPN implementations — a rootful container or a specific capability grant is required, and the security tradeoff should be documented and deliberate.
+
+```mermaid
+flowchart LR
+    USER["Unprivileged user<br/>(alice, UID 1000)"]
+    USERNS["User namespace<br/>UID 0 inside container"]
+    REMAP["Kernel remapping<br/>/etc/subuid mapping"]
+    HOST["Host UID 100000<br/>(not root on host)"]
+    CGROUP["cgroup limits<br/>(CPU, memory)"]
+
+    USER -->|"podman run"| USERNS
+    USERNS --> REMAP
+    REMAP --> HOST
+    USER --> CGROUP
+    CGROUP -->|"enforced by kernel"| HOST
+```
+
 #### User Namespace Remapping
 
 When you run `podman run` as a non-root user, Podman creates a **user namespace** for the container. Inside that namespace, the process sees itself as UID 0 (root). On the host, it maps to your unprivileged UID.
@@ -1095,6 +1225,12 @@ loginctl show-user $USER | grep Linger
 ---
 
 ## Intermediate: Container Security
+
+The principle of least privilege applied to containers means the container process should have exactly the permissions it needs to perform its function — no more. Running as root inside a container is the most common violation. Even though root inside a rootful container is slightly constrained (namespace boundaries, seccomp filters), it is not isolated enough. A container escape vulnerability in the runtime can escalate container root to host root. A non-root container process requires an additional step to exploit — the attacker must also escalate from the container UID to root inside the container before attempting the escape.
+
+Linux capabilities are the granular mechanism for granting specific privileged operations without full root access. The kernel divides root's privileges into approximately 40 distinct capabilities: `CAP_NET_BIND_SERVICE` (bind to ports below 1024), `CAP_SYS_PTRACE` (trace processes), `CAP_NET_ADMIN` (configure network interfaces), and so on. The security best practice is `--cap-drop ALL --cap-add <specific_cap>`: drop every capability explicitly, then add back only those your application actually requires. Most web applications and services need zero capabilities. Those that do typically need one or two specific ones — pinning them explicitly makes security review tractable.
+
+A privileged container (`--privileged`) is equivalent to root on the host with no meaningful isolation. It has access to all devices, all capabilities, and can modify host networking and filesystem mounts. There are legitimate uses — container-based CI runners that need to build and run containers, certain security scanning tools — but privileged containers should be treated as an exception requiring documented justification, not a default for "it didn't work without it." When someone says "just add `--privileged`," the correct response is to identify which specific capability or device access is actually needed and grant only that.
 
 ### Key Security Principles
 

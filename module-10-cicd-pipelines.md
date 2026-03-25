@@ -33,6 +33,21 @@ CI/CD (Continuous Integration / Continuous Delivery/Deployment) is the engine of
 
 This module covers three industry-standard CI/CD tools: **GitHub Actions** (the most widely adopted modern tool), **GitLab CI/CD** (built into GitLab, strong DevSecOps features), and **Jenkins** (the battle-tested enterprise classic).
 
+```mermaid
+flowchart LR
+    PUSH["Code push<br/>(git push)"]
+    TRIG["Trigger<br/>(webhook)"]
+    BUILD["Build<br/>(compile / install deps)"]
+    TEST["Test<br/>(unit + integration)"]
+    SCAN["Security scan<br/>(SAST + dependency audit)"]
+    PKG["Build artifact<br/>(container image)"]
+    STAGING["Deploy to staging<br/>(automatic)"]
+    INTTEST["Integration tests<br/>(smoke + E2E)"]
+    PROD["Deploy to production<br/>(manual gate or auto)"]
+
+    PUSH --> TRIG --> BUILD --> TEST --> SCAN --> PKG --> STAGING --> INTTEST --> PROD
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -57,6 +72,24 @@ By the end of this module you will be able to:
 ---
 
 ## Beginner: CI/CD Fundamentals
+
+CI/CD is the operational heart of DevOps — the system that closes the loop between writing code and running code in front of users. Before CI/CD, teams integrated infrequently, which meant integration problems accumulated and became painful to untangle. Before CD, deployment was a high-ceremony event requiring careful coordination, usually resulting in infrequent releases that bundled many changes and made root-cause analysis difficult when something went wrong.
+
+The three terms represent increasing levels of automation. **Continuous Integration** is a practice: merge code frequently (at least daily), and have every merge trigger an automated build and test run. The benefit is not the tooling — it is the discipline of never letting branches diverge long enough for integration to become hard. **Continuous Delivery** is a capability: the main branch should always be in a state that could be deployed to production. That requires disciplined testing, environment parity, and deployment automation, but the final production deployment still requires a human decision. **Continuous Deployment** is a policy: every passing change is automatically deployed to production with no human gate. This is the most aggressive form and requires the highest level of automated quality coverage and observability.
+
+CI/CD pipelines fail, and designing for recovery is as important as designing for success. A pipeline that breaks and is not immediately fixed is a broken development workflow. The most common failure modes are flaky tests (intermittent failures that erode trust in the pipeline signal), slow pipelines (encouraging developers to skip running them), credential expiry (a midnight production deployment blocked by an expired token), and configuration drift between environments (staging passes but production breaks). Designing for recovery means: make tests deterministic, parallelize aggressively to keep pipelines under ten minutes, rotate credentials before they expire, and keep environment configuration as code.
+
+```mermaid
+flowchart LR
+    COMMIT["Commit to<br/>feature branch"]
+    CI["CI: build + test + scan"]
+    ART["artifact<br/>(tagged image)"]
+    STAGING["CD Delivery:<br/>deploy to staging"]
+    GATE["approval gate<br/>(human review)"]
+    PROD["CD Deployment:<br/>automatic deploy to prod"]
+
+    COMMIT --> CI --> ART --> STAGING --> GATE --> PROD
+```
 
 CI/CD is really about reducing the amount of uncertainty between writing code and running code in production. Without a pipeline, teams rely on memory, handoffs, and manual repetition: someone builds locally, someone else runs tests later, and deployment becomes a special event that feels risky every time. A good pipeline turns that fragile sequence into a repeatable system that checks quality continuously and makes releases boring in the best possible way.
 
@@ -108,6 +141,34 @@ Code Push → Build → Test → Scan → Package → Deploy to Staging → Appr
 ## Beginner: Deployment Strategies
 
 Once a pipeline can build and test software, the next challenge is changing production safely. That is where deployment strategy matters. The question is not just "how do we push a new version?" but "how do we limit blast radius, observe behavior, and recover quickly if the release is bad?" Different strategies make different tradeoffs between infrastructure cost, rollout speed, complexity, and rollback safety.
+
+**Blue-green** deployment has a zero-downtime cutover and instant rollback — you simply flip traffic back to the old environment. The cost is that you need double the production infrastructure running simultaneously during the deployment window, and both environments must have access to shared state (databases, caches) in a compatible way. **Rolling updates** are cheaper because you replace instances gradually without duplicating the entire fleet. The tradeoff is that you briefly run two versions simultaneously, which requires backward-compatible APIs and database schemas during the transition period. **Canary deployments** are the most conservative strategy: you route a small percentage of real production traffic (5–10%) to the new version, observe metrics and error rates, and only promote the new version to full traffic if it looks healthy. Canaries catch version-specific issues that staging environments cannot reproduce, but they require traffic-splitting infrastructure (usually a load balancer or service mesh) and solid observability to know when to promote or roll back.
+
+The right strategy depends on context. A simple internal API might tolerate rolling updates with a brief mixed-version window. A payment processing service should probably use canaries with automatic rollback triggers on error rate increases. Blue-green is worth the cost when you need zero downtime and you have the budget for duplicate environments — common in larger organizations where the infrastructure cost is smaller than the business cost of a failed deployment.
+
+```mermaid
+flowchart LR
+    subgraph "Blue-Green"
+        BG_OLD["Blue<br/>v1.0 (live)"]
+        BG_NEW["Green<br/>v1.1 (deployed)"]
+        BG_SW["switch traffic<br/>(instant rollback available)"]
+        BG_OLD -->|"deploy new version"| BG_NEW
+        BG_NEW --> BG_SW
+    end
+    subgraph "Rolling"
+        R1["v1.0 x10"]
+        R2["v1.0 x8<br/>v1.1 x2"]
+        R3["v1.1 x10"]
+        R1 -->|"replace gradually"| R2 -->|"complete"| R3
+    end
+    subgraph "Canary"
+        C_MAIN["v1.0<br/>95% traffic"]
+        C_CAN["v1.1 canary<br/>5% traffic"]
+        C_MON["monitor metrics"]
+        C_PROM["promote to 100%<br/>or rollback"]
+        C_MAIN & C_CAN --> C_MON --> C_PROM
+    end
+```
 
 This is why deployment strategy should never be chosen in isolation from your platform. A small internal service might be perfectly fine with rolling updates, while a customer-facing payment service might justify canaries or blue-green cutovers. The right choice depends on risk tolerance, traffic patterns, observability maturity, and how expensive downtime is for the business.
 
@@ -371,6 +432,32 @@ jobs:
       - run: npm test
 ```
 
+### GitHub Actions: Event Model
+
+Understanding the event model is essential to writing workflows that do the right thing at the right time. The `on:` key accepts a wide range of triggers: `push`, `pull_request`, `schedule`, `workflow_dispatch`, `workflow_call`, `release`, and more. These triggers are not equivalent. A `push` trigger fires on every direct commit to a branch — useful for building but dangerous for production deployments. A `workflow_dispatch` trigger fires only when manually triggered via the GitHub UI or API, making it the right choice for operational actions that should never run automatically. A `pull_request` trigger fires when a PR is opened, updated, or synchronized, and its workflows run in the context of the PR's head commit — meaning they do not have access to repository secrets from the base branch by default, which is a security boundary worth understanding.
+
+Event filters narrow triggers further. You can restrict a `push` trigger to specific branches with `branches:` or to specific file paths with `paths:`. A workflow that rebuilds documentation only when docs change, or that runs production deployment only on `main`, is using event filters to remove noise and prevent unintended side effects. Without filters, pipelines fire on every commit to every branch, wasting runner minutes and creating alert fatigue.
+
+Matrix builds are one of the most efficient features of GitHub Actions. When you specify a `strategy.matrix`, GitHub Actions fans out the job into N parallel runs, one per matrix value combination. A 3-node × 2-OS matrix produces 6 concurrent jobs without any extra workflow logic. This is the cleanest way to validate cross-platform or cross-version compatibility without serializing test runs. Matrix jobs share the same workflow YAML but each run in complete isolation on its own runner, so failures in one combination do not block the others unless you set `fail-fast: true`.
+
+```mermaid
+flowchart LR
+    PUSH["push event<br/>(branch filter: main)"]
+    PR["pull_request event<br/>(types: opened, synchronize)"]
+    SCHED["schedule event<br/>(cron: 0 2 * * *)"]
+    DISPATCH["workflow_dispatch<br/>(manual trigger)"]
+    WCALL["workflow_call<br/>(called by another workflow)"]
+
+    PUSH --> JOB_CI["CI job<br/>(build + test)"]
+    PR --> JOB_CI
+    SCHED --> JOB_NIGHTLY["nightly job<br/>(full regression suite)"]
+    DISPATCH --> JOB_DEPLOY["deploy job<br/>(production gate)"]
+    WCALL --> JOB_REUSABLE["reusable job<br/>(shared across repos)"]
+
+    JOB_CI --> MATRIX["matrix strategy<br/>(Node 18 / 20 / 21<br/>× ubuntu / macos)"]
+    MATRIX --> RESULTS["parallel results<br/>(6 concurrent runs)"]
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -382,6 +469,10 @@ GitLab CI/CD uses a `.gitlab-ci.yml` file at the repository root.
 GitLab CI/CD is strongest when a team wants a single platform for source control, pipelines, package registry, environments, and parts of the security workflow. That integrated model can simplify operations because fewer external systems need to be stitched together. It also encourages teams to think of delivery as an end-to-end value stream rather than as isolated scripts triggered by commits.
 
 The downside is that the pipeline file can become dense quickly as more concerns accumulate: build logic, caching, artifacts, security scans, deploy jobs, environment rules, and reusable templates all converge in one place. For that reason, strong GitLab pipelines usually invest early in stage design, templating, and naming discipline so the configuration remains understandable months later.
+
+The GitLab CI/CD model is stage-first. You declare an ordered list of stages — `build`, `test`, `scan`, `package`, `deploy` — and then assign jobs to each stage. All jobs within a stage run in parallel by default. Jobs in later stages only start after all jobs in the preceding stage have succeeded. This is an important difference from GitHub Actions, where job dependencies are expressed job-by-job with `needs:`. In GitLab, stage order is the default dependency model, and `needs:` is an opt-in override that activates DAG (Directed Acyclic Graph) mode, allowing a job to start as soon as its direct dependencies finish rather than waiting for the entire previous stage.
+
+The integrated platform advantage is most visible in security workflows. GitLab can run SAST, dependency scanning, container scanning, and secret detection as first-class pipeline jobs without requiring external integrations. Results show up natively in merge request pipelines, environments, and compliance dashboards. For teams with regulatory requirements — auditing, separation of duties, security approvals — that built-in traceability can significantly reduce the effort of demonstrating compliance compared to assembling the same capabilities from separate tools.
 
 ### Core Concepts
 
@@ -680,6 +771,25 @@ pipeline {
 }
 ```
 
+The `post` block and `input` directive in the example above illustrate two Jenkins-specific strengths. `post` conditions (`success`, `failure`, `always`) allow notification and cleanup logic to be attached declaratively to any stage or the full pipeline, keeping side-effect logic out of the main `stages` block. The `input` directive pauses a pipeline and waits for a human to click an approval button before proceeding — a simple but powerful production gate that many teams value for operational safety.
+
+Jenkins pipelines can also be visualized in the Blue Ocean UI as a stage graph, making it easy to see which stages passed, which failed, and how long each took. The stage view is one of the clearest representations of a CI/CD pipeline available in any tool, which is part of why Jenkins remains popular in organizations where pipeline transparency to non-engineers matters.
+
+```mermaid
+flowchart LR
+    CHECKOUT["Checkout<br/>(checkout scm)"]
+    BUILD["Build<br/>(npm ci + npm run build)"]
+    UNIT["Unit Tests<br/>(parallel)"]
+    LINT["Lint<br/>(parallel)"]
+    DOCKER["Build Docker Image<br/>(docker.withRegistry)"]
+    STAGING["Deploy to Staging<br/>(withKubeConfig)"]
+    GATE["Input Gate<br/>(human approval)"]
+    PROD["Deploy to Production<br/>(withKubeConfig)"]
+    POST["Post<br/>(Slack notify + cleanWs)"]
+
+    CHECKOUT --> BUILD --> UNIT & LINT --> DOCKER --> STAGING --> GATE --> PROD --> POST
+```
+
 ### Jenkins Shared Libraries
 
 ```groovy
@@ -875,6 +985,10 @@ As your organization grows, you'll find yourself copy-pasting pipeline YAML acro
 Reuse becomes important the moment you have more than a handful of repositories doing similar things. Copy-paste feels fast initially, but it creates a silent maintenance tax: security fixes must be repeated everywhere, build logic drifts over time, and different teams end up with pipelines that look similar but behave differently in subtle ways. Shared workflow building blocks are a way to standardize delivery without forcing every application into the same monolithic pipeline.
 
 The real challenge is balancing consistency with flexibility. Centralized workflows should encode the things that truly ought to be common, such as image build policy, test conventions, or signing steps. They should not erase every application-specific need. The healthiest pattern is usually a thin shared platform layer with clearly documented extension points.
+
+In GitHub Actions, there are two distinct reuse mechanisms and they solve different problems. A **reusable workflow** (`workflow_call`) is a complete workflow file with its own jobs and runners. The caller triggers it as an entire job-level unit and passes in inputs and secrets. This is the right tool when you want to standardize a multi-step delivery process — build, scan, push — across many repos. A **composite action**, stored in `.github/actions/`, bundles a set of steps into a single named step. It runs on the caller's runner inside the caller's job rather than spinning up a new one. Composite actions are the right tool when you want to extract repetitive step sequences (like setup + install + cache) without the overhead of a separate job boundary.
+
+The practical rule is: use composite actions to avoid repeating step-level boilerplate within a job; use reusable workflows to avoid repeating job-level (or multi-job) pipeline logic across repositories. The two can also nest: a reusable workflow can use composite actions internally, and the caller only sees the clean reusable workflow interface. This layering is how platform teams build meaningful abstraction without requiring application teams to understand the implementation details of the shared delivery infrastructure.
 
 ### GitHub Actions: Reusable Workflows
 

@@ -66,6 +66,25 @@ By the end of this module you will be able to:
 
 Git is a **distributed** version control system — every developer has a full copy of the entire history locally. Changes are tracked as a series of **commits**, each with a unique SHA-1 (or SHA-256 in newer Git) hash.
 
+Git's storage model is a directed acyclic graph (DAG) of content-addressed objects. Every commit is a snapshot, not a diff, and its SHA-1 hash is derived from its content — including the hash of its parent commit. This means Git history is tamper-evident: you cannot change any commit in history without changing the hash of every commit that follows it. Engineers who understand this model are immune to the confusion that plagues those who think of Git as "tracking changes" — Git tracks states, and the differences you see from `git diff` are computed on the fly by comparing two snapshot objects.
+
+Commits are immutable. When you `git commit --amend`, you are not editing the last commit — you are creating a new commit with a new hash and moving the branch pointer to it. When you `git rebase`, each commit on your branch is replayed onto the new base, producing new commits with new hashes even if the content is identical. Operations that appear to "change history" are actually creating new history and pointing branches at the new commits. This is why force-pushing rebased commits to shared branches is destructive: anyone who has the old commits will have their history diverge from the new one.
+
+A branch is just a pointer — a 41-byte file in `.git/refs/heads/` containing a commit hash. Creating a branch does not copy files. Deleting a branch does not delete commits (until garbage collection). `HEAD` is a pointer to either a branch (attached state) or a specific commit (detached HEAD state). Understanding that branches are cheap pointers is what makes feature-branch workflows intuitive: you are not creating a parallel copy of your codebase, you are just giving a commit a name.
+
+```mermaid
+flowchart LR
+    WD["Working Directory<br/>(files on disk)"]
+    IDX["Staging Area<br/>(Index)"]
+    REPO["Repository<br/>(.git)"]
+
+    WD -->|"git add"| IDX
+    IDX -->|"git commit"| REPO
+    REPO -->|"git checkout / restore"| WD
+    IDX -->|"git restore --staged"| WD
+    REPO -->|"git reset --hard"| WD
+```
+
 ### Key Concepts
 
 | Term | Definition |
@@ -188,6 +207,27 @@ git reset --hard origin/main    # Reset local branch to match remote exactly
 ## Beginner: Branching & Merging
 
 Branches let you develop features in isolation without affecting the main codebase. A branch is just a lightweight pointer — creating one is nearly free.
+
+The ease of branching in Git is a genuine competitive advantage over older version control systems. In Subversion or CVS, branching created a physical copy of the codebase tree on the server — an operation that took seconds or minutes and consumed disk space. In Git, creating a branch writes a 41-byte file. This difference in cost changes how engineers work: cheap branches encourage experimentation, frequent integration, and workflow patterns (feature branches, release branches, hotfix branches) that are impractical when branching is expensive.
+
+The choice between merge commit and rebase determines the shape of your project's history. A merge commit (`git merge --no-ff`) preserves the fact that work happened in parallel — you can see exactly which commits came from which branch and when they were integrated. Rebase produces a linear history that is easier to read with `git log --oneline` but hides the parallel development that actually occurred. Neither is universally correct. The critical rule is: never rebase commits that have been pushed to a shared branch. Once other engineers have based work on a commit, changing that commit's hash forces them to reconcile diverged histories.
+
+Squash merging is a pragmatic compromise for teams with noisy WIP commit hygiene. It takes all the commits on a feature branch and collapses them into a single commit on the target branch. The main branch history stays clean and bisectable, while engineers are free to commit as messily as they like during development. The tradeoff is that the individual steps of the work are lost — you cannot `git bisect` into the feature's development history to find where a bug was introduced within those commits.
+
+```mermaid
+flowchart LR
+    MAIN1["main: A"]
+    MAIN2["main: B"]
+    FEAT1["feature: C"]
+    FEAT2["feature: D"]
+    MERGE["main: E (merge commit)"]
+
+    MAIN1 --> MAIN2
+    MAIN2 --> FEAT1
+    FEAT1 --> FEAT2
+    MAIN2 --> MERGE
+    FEAT2 --> MERGE
+```
 
 ```bash
 git branch                          # List local branches
@@ -365,7 +405,29 @@ git rerere forget   # Forget a recorded resolution
 
 ## Intermediate: Git Workflows
 
-### GitHub Flow (Simple — recommended for most teams)
+The workflow you choose determines how quickly your team can safely deploy. GitHub Flow (branch → PR → merge to main → deploy) works because it keeps `main` always in a deployable state and eliminates the coordination overhead of managing multiple long-lived branches. Every change goes through a pull request, which provides a natural gate for code review, automated testing, and deployment preview. The constraint is that `main` must always be safe to deploy — which requires good test coverage and the discipline to keep changes small.
+
+GitFlow introduces additional branch types — `develop`, `release/*`, `hotfix/*` — to support teams that cannot continuously deploy. If your product ships on a fixed release schedule, or if QA cycles require a stable integration branch separate from active development, GitFlow provides the structure to manage that. The cost is significant coordination overhead: every release requires merging into both `main` and `develop`, hotfixes must be cherry-picked to both branches, and `develop` frequently diverges enough from `main` to create painful integration conflicts. Many teams adopt GitFlow thinking they need it and then discover the coordination overhead exceeds the benefit.
+
+Trunk-based development — where all engineers commit directly to `main` (or through very short-lived branches that live for hours, not days) — is the approach that enables high-velocity continuous delivery. Google, Meta, and most elite engineering organizations practice trunk-based development. The key enablers are: feature flags (to ship code without activating features), strong automated testing (so a failing build never lands on main), and the discipline to keep each commit small and focused. If your CI pipeline catches regressions before merge and you have feature flags for incomplete work, the risks that GitFlow addresses with branch isolation are already handled.
+
+```mermaid
+flowchart TD
+    MAIN["main (production)"]
+    DEV["develop (integration)"]
+    FEAT["feature/X"]
+    REL["release/1.0"]
+    HOT["hotfix/Y"]
+
+    DEV -->|"merge feature"| FEAT
+    FEAT -->|"PR to develop"| DEV
+    DEV -->|"cut release"| REL
+    REL -->|"merge to main"| MAIN
+    REL -->|"merge back"| DEV
+    MAIN -->|"branch hotfix"| HOT
+    HOT -->|"merge to main"| MAIN
+    HOT -->|"merge to develop"| DEV
+```
 
 ```
 main (always deployable)
@@ -535,6 +597,29 @@ git worktree remove ../hotfix-branch
 ## Intermediate: Git Hooks
 
 Git hooks are scripts that run automatically at specific points in the Git workflow. They live in `.git/hooks/` and must be executable.
+
+```mermaid
+flowchart LR
+    EDIT["Edit code"]
+    ADD["git add"]
+    PRECOMMIT["pre-commit hook<br/>(lint, secrets scan)"]
+    COMMITMSG["commit-msg hook<br/>(enforce format)"]
+    COMMIT["git commit"]
+    PREPUSH["pre-push hook<br/>(run tests)"]
+    PUSH["git push"]
+    CI["CI pipeline<br/>(remote checks)"]
+
+    EDIT --> ADD
+    ADD --> PRECOMMIT
+    PRECOMMIT -->|"pass"| COMMITMSG
+    COMMITMSG -->|"pass"| COMMIT
+    COMMIT --> PREPUSH
+    PREPUSH -->|"pass"| PUSH
+    PUSH --> CI
+    PRECOMMIT -->|"fail"| EDIT
+    COMMITMSG -->|"fail"| EDIT
+    PREPUSH -->|"fail"| EDIT
+```
 
 ### Hook Execution Points
 
@@ -864,30 +949,28 @@ git push origin --force --tags
 
 GitOps is an operational model where Git is the **single source of truth** for the desired state of your infrastructure and applications. Changes to the system are made exclusively through Git commits and pull requests — never through `kubectl apply` or console clicks.
 
-**The Four Principles of GitOps** (defined by Weaveworks / OpenGitOps):
+The four GitOps principles defined by OpenGitOps are not just a philosophy — they are the properties that make GitOps operationally safer than push-based deployment. Declarative state means the system can be fully reconstructed from Git at any time. Versioned and immutable state means every change is auditable with full context (who, what, when, why via commit message). Pull-based application means the cluster reaches out to Git rather than an external system pushing changes in — this eliminates the need to grant deployment systems write access to clusters, significantly reducing blast radius if a CI/CD system is compromised. Continuous reconciliation means configuration drift is detected and corrected automatically rather than accumulating silently until a deployment reveals inconsistency.
 
-1. **Declarative** — The desired system state is expressed declaratively (Kubernetes manifests, Helm charts, Kustomize)
-2. **Versioned and Immutable** — All state lives in Git — every change is versioned, auditable, reversible
-3. **Pulled Automatically** — Software agents (ArgoCD, Flux) automatically pull and apply state from Git
-4. **Continuously Reconciled** — Agents continuously compare desired state (Git) to actual state (cluster), and correct drift
+The pull-based vs push-based distinction has real security implications. In a push-based model (a CI pipeline that runs `kubectl apply`), the CI system must have credentials with write access to your production cluster. If your CI system is compromised, an attacker has a direct path to production. In a pull-based model (ArgoCD or Flux running in the cluster), the cluster credentials never leave the cluster. An attacker who compromises your CI system can modify the Git repository, but the GitOps operator will only apply changes that exist in Git and have passed branch protection rules and required reviews.
 
-```
-Developer pushes commit
-       │
-       ▼
-  Git Repository ◀──────────────────────────────────────────┐
-  (desired state)                                            │
-       │                                               (reports back)
-       │ pull every N seconds
-       ▼
-  GitOps Operator (ArgoCD / Flux)
-  - Compares Git state vs live cluster state
-  - Detects drift
-  - Applies changes to reconcile
-       │
-       ▼
-  Kubernetes Cluster
-  (actual state)
+ArgoCD and Flux represent different architectural opinions on GitOps. ArgoCD provides a rich UI, multi-cluster management, and an application-centric model where each deployed application is represented as an ArgoCD `Application` resource. Flux is more Kubernetes-native and GitOps-pure — it reconciles YAML files directly and can be managed entirely through Git without a separate UI. ArgoCD is typically preferred when teams want visibility and self-service deployment UI; Flux when teams want a minimal footprint and deep Kubernetes integration.
+
+```mermaid
+flowchart LR
+    DEV(["Developer pushes commit"])
+    GIT["Git Repository<br/>(desired state)"]
+    OP["GitOps Operator<br/>(ArgoCD / Flux)"]
+    DIFF{"Desired state<br/>= live state?"}
+    APPLY["Apply changes<br/>to cluster"]
+    CLUSTER["Live Cluster<br/>(actual state)"]
+
+    DEV --> GIT
+    GIT -->|"pull every N seconds"| OP
+    OP --> DIFF
+    DIFF -->|"no (drift)"| APPLY
+    DIFF -->|"yes (in sync)"| CLUSTER
+    APPLY --> CLUSTER
+    CLUSTER -->|"report status"| OP
 ```
 
 **GitOps vs Traditional CI/CD push:**

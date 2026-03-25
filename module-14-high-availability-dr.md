@@ -34,6 +34,24 @@
 
 High Availability (HA) and Disaster Recovery (DR) are the engineering disciplines that ensure your systems survive component failures, data center outages, and catastrophic events. HA focuses on eliminating single points of failure to maximize uptime. DR focuses on restoring operations after a significant failure with defined time and data loss targets. This module covers both disciplines with practical implementation patterns.
 
+HA and DR are related but distinct. HA is an ongoing operational property — the system is designed so that no single failure causes downtime. Components are redundant, load balancers detect and route around failures, and everything can be updated without taking the service down. DR is a recovery process — it activates when a failure is large enough that normal HA is insufficient, such as a region-wide cloud outage, ransomware encrypting the primary database, or a catastrophic deployment that corrupted data. A system can have excellent HA and still need DR if an entire availability zone disappears.
+
+MTBF (Mean Time Between Failures) and MTTR (Mean Time To Repair) are the two quantities that drive availability. Availability equals MTBF divided by (MTBF + MTTR). Improving availability therefore means either making failures rarer (longer MTBF through better hardware, testing, and redundancy) or making recovery faster (shorter MTTR through automation, runbooks, and trained teams). Many organisations over-invest in preventing failures and under-invest in fast recovery. A well-practiced five-minute recovery from any failure is often more valuable than an architecture designed to never fail.
+
+```mermaid
+flowchart TD
+    DNS["DNS<br/>(Route 53 / latency routing)"]
+    LB["Load Balancer<br/>(multi-AZ, health checks)"]
+    APP["App Tier<br/>(auto-scaling group, N+1)"]
+    DB["Database Tier<br/>(primary-replica / Galera)"]
+    STOR["Storage<br/>(replicated, multi-AZ)"]
+    BACKUP["Backups<br/>(3-2-1, offsite, tested)"]
+
+    DNS --> LB --> APP --> DB --> STOR
+    DB --> BACKUP
+    STOR --> BACKUP
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -60,6 +78,12 @@ By the end of this module, you will be able to:
 
 ## Core Concepts: RTO, RPO, SLA
 
+RTO and RPO are business requirements that must be agreed before engineering decisions are made, not engineering outputs that are calculated afterward. When a business says "we need five nines of availability," the first question should be: what is the RTO and RPO for each component? A payment system might need a one-minute RTO and zero RPO (no data loss). An internal HR dashboard might be fine with a four-hour RTO and one-hour RPO. These different requirements justify radically different architectures and budgets, and conflating them leads to either over-engineering or under-engineering.
+
+The cost of reducing RPO increases exponentially as it approaches zero. Moving from one-hour RPO to fifteen-minute RPO typically requires more frequent backups and potentially log shipping or CDC (Change Data Capture). Moving from fifteen-minute RPO to five-minute RPO requires synchronous replication or continuous streaming. Moving from five-minute RPO to zero requires synchronous write confirmation across at least two sites before every transaction — which adds latency on every write, limits geographic distance between sites (speed of light constraints), and significantly increases complexity. Teams that demand sub-minute RPO without understanding these costs often discover them painfully during database performance investigations.
+
+The trade-off triangle for DR is time, data, and money. Fast recovery (low RTO) requires pre-warmed infrastructure, which costs money. No data loss (zero RPO) requires synchronous replication, which either costs money (multi-site infrastructure) or costs time (high write latency). Cheap DR (low cost) means slower recovery and/or potential data loss. Teams should make this trade-off explicitly rather than discover it during an incident.
+
 ### Key metrics
 
 | Metric | Full Name | Definition | Example |
@@ -80,6 +104,18 @@ Last backup          Failure           Recovery complete
      │◄──── RPO ────────►│◄────── RTO ─────────►│
      │    (data loss)     │    (downtime)        │
      │    max 1 hour      │    max 4 hours       │
+```
+
+```mermaid
+flowchart LR
+    LB["Last backup<br/>(or last sync point)"]
+    F["Failure event"]
+    RD["Recovery declared"]
+    RC["Recovery complete<br/>(service verified)"]
+
+    LB -->|"RPO window<br/>(max data loss)"| F
+    F -->|"MTTD<br/>(detect)"| RD
+    RD -->|"RTO window<br/>(max downtime)"| RC
 ```
 
 ### Translating business requirements
@@ -157,6 +193,12 @@ For each system component, ask:
 
 ## High Availability Architecture Patterns
 
+Active-passive and active-active are both valid HA patterns, but they have genuinely different engineering complexity and failure semantics. Active-passive is conceptually simpler: one node handles traffic, the other is a warm standby ready to take over. Failover is a defined, well-understood event. The challenge is that the passive node consumes resources without doing productive work, and failover time (seconds to minutes depending on detection and cutover) is non-zero. For most stateful workloads — especially databases — active-passive with fast automated failover is the right choice because it avoids the hardest problem in distributed systems: concurrent writes from multiple nodes.
+
+Active-active genuinely shares load across all nodes simultaneously, eliminating the wasted standby capacity and reducing RTO to near-zero because all nodes are already serving traffic. However, the engineering complexity is substantially higher for any stateful component. The central problem is distributed writes: if two nodes each accept a write to the same record at the same time, you have a conflict that requires a resolution strategy. For truly stateless services (web servers, API gateways, stateless microservices), active-active is the natural and preferred choice. For databases, it requires either strong consistency protocols (synchronous consensus like Paxos/Raft, which adds latency) or eventual consistency (which accepts temporary divergence). Most teams who think they want active-active for databases actually want active-passive with a thirty-second automated failover.
+
+Split-brain is the failure mode that makes active-active dangerous for stateful systems. If the network link between two nodes is severed but both nodes remain otherwise healthy, each node may believe the other is dead and start accepting writes independently. When the network recovers, you have two divergent data sets with no canonical truth. Preventing split-brain requires a quorum mechanism (never have exactly two nodes) or a fencing mechanism (ensure the failed/partitioned node cannot accept writes before the survivor promotes). These mechanisms add complexity that teams often underestimate.
+
 ### Active-Passive (Failover)
 
 ```
@@ -217,6 +259,24 @@ If 1 fails:     2 remaining still meet load requirements
 | **AZ-level** | Same city, different data centers | < 1 min | Cloud HA |
 | **Region-level** | Same country, 100s of km apart | Minutes–hours | Regional DR |
 | **Cross-region** | Different countries/continents | Hours | Full DR |
+
+```mermaid
+flowchart LR
+    MON["Health Monitor<br/>(HAProxy / Keepalived / cloud LB)"]
+    F["Primary failure<br/>detected"]
+    FE["Fencing<br/>(STONITH / isolate primary)"]
+    PRO["Promote replica<br/>(remove read_only)"]
+    DNS2["Update VIP / DNS<br/>(point to new primary)"]
+    TF["Traffic flows<br/>to new primary"]
+    VA["Validate<br/>(health checks pass)"]
+
+    MON -->|"heartbeat timeout"| F
+    F --> FE
+    FE --> PRO
+    PRO --> DNS2
+    DNS2 --> TF
+    TF --> VA
+```
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -383,6 +443,12 @@ vrrp_instance VI_1 {
 ---
 
 ## Database High Availability
+
+Database HA is where the replication trade-off between consistency and performance becomes concrete. **Synchronous replication** guarantees that a write is committed on at least one replica before it is acknowledged to the application. This means if the primary fails immediately after a write, the replica has that data. The cost is added write latency on every transaction — the primary must wait for a network round trip and a replica commit before returning success. This makes synchronous replication sensitive to network latency between primary and replica, which limits geographic separation and creates performance pressure under high write load.
+
+**Asynchronous replication** acknowledges the write immediately on the primary and ships the change to the replica in the background. This adds no latency to the write path and allows the replica to lag behind under heavy load without affecting the primary. The cost is the possibility of data loss on a sudden primary failure: any changes applied to the primary but not yet shipped to the replica are lost. MySQL's `innodb_flush_log_at_trx_commit=1` and `sync_binlog=1` settings ensure data durability on the primary itself (ACID compliance), but do not eliminate replication lag. In practice, well-tuned asynchronous replication typically runs with sub-second lag, which means the RPO risk is low but non-zero.
+
+Semi-synchronous replication (MySQL 5.7+, MariaDB) is a middle ground: the primary waits for at least one replica to acknowledge receipt of the transaction before returning to the application, but does not wait for the replica to fully apply it. This gives a stronger durability guarantee than pure async without the full performance cost of fully synchronous replication. Galera Cluster (used by MariaDB Galera and Percona XtraDB Cluster) implements a certification-based multi-primary protocol where all nodes apply the same transactions in the same order — effectively synchronous across the cluster, at the cost of higher latency for conflicting transactions and network sensitivity.
 
 ### MySQL / MariaDB Primary-Replica Replication
 
@@ -584,6 +650,24 @@ Example:
 | **Differential** | Changes since last FULL backup | Medium | Medium |
 | **Snapshot** | Point-in-time storage snapshot | Fast | Medium |
 | **Continuous (CDC)** | Continuous log shipping / CDC | Near-zero RPO | Ongoing |
+
+```mermaid
+flowchart TD
+    FULL["Full backup<br/>(Sunday)"]
+    INC1["Incremental<br/>(Monday — changes since Sunday)"]
+    INC2["Incremental<br/>(Tuesday — changes since Monday)"]
+    INC3["Incremental<br/>(Wednesday — changes since Tuesday)"]
+    DIFF1["Differential<br/>(Monday — changes since last Full)"]
+    DIFF2["Differential<br/>(Wednesday — changes since last Full)"]
+    SNAP["Snapshot<br/>(instant, storage-level)"]
+    CDC["Continuous CDC<br/>(near-zero RPO — log streaming)"]
+
+    FULL -->|"base for"| INC1 --> INC2 --> INC3
+    FULL -->|"base for"| DIFF1
+    FULL -->|"base for"| DIFF2
+    SNAP -.->|"independent<br/>point-in-time"| FULL
+    CDC -.->|"supplements<br/>full backup"| FULL
+```
 
 ### MySQL / MariaDB backup with mysqldump
 
@@ -1038,6 +1122,12 @@ Quarterly DR Test Checklist:
 
 ## DR Testing & Chaos Engineering
 
+DR plans that are never tested are fiction. The pattern repeats in nearly every post-incident report involving a slow recovery: the runbook was written once and never validated, the team had never practiced the steps, a dependency had changed and the runbook was wrong, or the backup restore procedure was correct on paper but took three times as long as expected under stress. Quarterly DR drills are not optional for any system with a real RTO — they are the mechanism that converts a document into a practiced capability.
+
+Chaos engineering extends this principle beyond disaster recovery to everyday resilience. Netflix's Chaos Monkey famously terminated random production instances to prove that the system could survive individual instance failures. The insight behind this approach is that complex systems always fail in ways that were not anticipated during design. The only way to discover failure modes you did not predict is to inject real failures and observe what happens. A chaos experiment that reveals a previously unknown SPOF is enormously more valuable than an experiment that confirms everything works as expected.
+
+The key discipline in chaos engineering is the scientific method: define a steady-state hypothesis before the experiment, introduce a specific and bounded failure, observe whether steady state holds, and fix the weakness if it does not. Running chaos experiments without a hypothesis produces noise, not signal. Starting in non-production environments and progressively moving to production (beginning with low-traffic periods) ensures that experiments teach you about the system without causing unnecessary customer impact. Every weakness found in a chaos experiment during a planned exercise is a weakness that did not cause an unplanned outage.
+
 ### Chaos Engineering principles
 
 > "Chaos Engineering is the discipline of experimenting on a system in order to build confidence in the system's capability to withstand turbulent conditions in production." — Netflix
@@ -1142,6 +1232,23 @@ rm /tmp/bigfile
 
 # Exhaust file descriptors
 ulimit -n 10  # Then run application — it will fail to open sockets/files
+```
+
+```mermaid
+flowchart LR
+    PLAN["Plan drill<br/>(notify stakeholders,<br/>schedule low-traffic window)"]
+    SS["Define steady state<br/>(baseline error rate, latency, RPS)"]
+    HYPO["Form hypothesis<br/>(if X fails, steady state holds)"]
+    EXEC["Execute failure<br/>(chaos injection / simulated DR)"]
+    OBS["Observe<br/>(dashboards, alerts, RTO clock)"]
+    VALID{"Steady state<br/>maintained?"}
+    PASS["Document result<br/>(passed — update runbook)"]
+    FIX["Fix weakness<br/>(SPOF remediation)"]
+    RETRY["Re-test<br/>(validate fix)"]
+
+    PLAN --> SS --> HYPO --> EXEC --> OBS --> VALID
+    VALID -->|"Yes"| PASS
+    VALID -->|"No"| FIX --> RETRY
 ```
 
 [↑ Back to TOC](#table-of-contents)

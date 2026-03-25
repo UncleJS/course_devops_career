@@ -40,6 +40,23 @@ Linux is the operating system that runs the internet. Over 90% of cloud servers,
 
 This module covers everything you need to navigate, manage, and administer a Linux system from the terminal — the foundational skill for every topic in this course.
 
+```mermaid
+flowchart TD
+    ROOT["/"]
+    ROOT --> ETC["/etc<br/>System configuration"]
+    ROOT --> VAR["/var<br/>Variable data: logs, databases"]
+    ROOT --> HOME["/home<br/>User home directories"]
+    ROOT --> USR["/usr<br/>Programs and libraries"]
+    ROOT --> PROC["/proc<br/>Virtual: process and kernel info"]
+    ROOT --> SYS["/sys<br/>Virtual: kernel and device info"]
+    ROOT --> DEV["/dev<br/>Device files"]
+    ROOT --> TMP["/tmp<br/>Temporary files (cleared on reboot)"]
+    ROOT --> OPT["/opt<br/>Optional third-party software"]
+    ROOT --> RUN["/run<br/>Runtime data: PIDs, sockets"]
+    USR --> USRBIN["/usr/bin<br/>User commands"]
+    USR --> USRLIB["/usr/lib<br/>Shared libraries"]
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -69,6 +86,12 @@ By the end of this module you will be able to:
 ## Beginner: Navigation & File Management
 
 The Linux filesystem is a tree structure that starts at `/` (the root). Everything — files, devices, processes — is a file in Linux.
+
+One of the most important concepts to internalize is that Linux treats everything as a file. Network sockets, hardware devices, kernel parameters, and running processes are all exposed as files in the virtual filesystems (`/proc`, `/sys`, `/dev`). This unifying abstraction means that the same tools you use to read a text file — `cat`, `grep`, `awk` — also work against kernel state. Understanding this is what separates engineers who fight the system from those who use it fluently.
+
+The layout of the Linux filesystem is standardized by the Filesystem Hierarchy Standard (FHS). Knowing what lives where means you always know where to look: configuration in `/etc`, logs in `/var/log`, runtime data in `/run`, installed software in `/usr`. This predictability holds across RHEL, Ubuntu, Debian, and Alpine. When you land on an unfamiliar server for the first time, the directory tree is a map you already know how to read.
+
+Navigating effectively from the command line is a force multiplier. Engineers who can move through directories, inspect files, and locate content quickly are dramatically more productive than those who reach for a GUI. The commands in this section — `ls`, `cd`, `find`, `grep`, `stat` — will be muscle memory within a few weeks of daily use. Build that muscle memory now, because every tool in this course assumes it.
 
 ### Key Directories
 
@@ -188,6 +211,24 @@ sort file.txt | uniq -c         # Count occurrences of each unique line
 ## Beginner: File Permissions
 
 Every file in Linux has three permission sets: **owner**, **group**, and **others**. Each set has three bits: **read (r)**, **write (w)**, **execute (x)**.
+
+The Unix permission model dates back to the early 1970s and is still the primary access control mechanism on every Linux system today. When the kernel evaluates whether a process can read, write, or execute a file, it checks the process's effective UID against the file's owner, then the effective GID against the file's group, then falls back to the "others" set. This evaluation is sequential and stops at the first match — if you are the file owner, the group and others permissions are irrelevant regardless of what they say.
+
+Understanding why there are three separate sets requires understanding the multi-user origins of Unix. A file might be owned by a specific engineer (`alice`), shared with a team (`devops`), and should be readable but not writable by everyone else on the system. The three-set model expresses that cleanly without needing per-user entries for every possible subject. For cases where that model is too coarse, Access Control Lists (ACLs) layer on top without replacing the core mechanism.
+
+The special permission bits — setuid, setgid, and sticky — are often misunderstood. Setuid on an executable means the process runs with the file owner's identity, not the caller's. This is how `sudo` and `/usr/bin/passwd` can write to files owned by root even when invoked by unprivileged users. Setgid on a directory means new files created inside inherit the directory's group rather than the creator's primary group — essential for shared project directories. The sticky bit on a directory (classically `/tmp`) means only the file's owner can delete it, preventing one user from removing another's files in a world-writable location.
+
+```mermaid
+flowchart LR
+    BITS["Permission String<br/>-rwxr-xr--"]
+    BITS --> OWN["Owner bits<br/>rwx = 4+2+1 = 7"]
+    BITS --> GRP["Group bits<br/>r-x = 4+0+1 = 5"]
+    BITS --> OTH["Others bits<br/>r-- = 4+0+0 = 4"]
+    OWN --> OCT["Octal: 754"]
+    GRP --> OCT
+    OTH --> OCT
+    OCT --> CMD["chmod 754 file"]
+```
 
 ### Reading Permissions
 
@@ -406,6 +447,22 @@ ls *.txt | xargs -P4 gzip              # Compress 4 files in parallel
 
 ## Beginner: System & Process Management
 
+```mermaid
+flowchart TD
+    CREATED(["Created<br/>fork() / exec()"])
+    RUNNING["Running<br/>scheduled on CPU"]
+    SLEEPING["Sleeping<br/>waiting for I/O or event"]
+    ZOMBIE["Zombie<br/>exited, parent not yet waited"]
+    TERMINATED(["Terminated<br/>resources released"])
+
+    CREATED --> RUNNING
+    RUNNING --> SLEEPING
+    SLEEPING --> RUNNING
+    RUNNING --> ZOMBIE
+    ZOMBIE --> TERMINATED
+    RUNNING -->|"SIGKILL"| TERMINATED
+```
+
 ```bash
 # Process inspection
 ps aux              # Show all running processes
@@ -449,6 +506,12 @@ vmstat 1 5          # Virtual memory stats, 5 samples every 1 second
 ## Beginner: SSH & Remote Access
 
 SSH (Secure Shell) is how you connect to remote servers — you will use this constantly as a DevOps engineer.
+
+SSH is arguably the single most important tool in a DevOps engineer's daily workflow. Every interaction with a remote server, every CI/CD runner that deploys code, every Ansible playbook that configures infrastructure — all of it flows over SSH. Understanding it deeply, not just as a command to type, is what allows you to debug connection failures, lock down access, and build automation that is both secure and reliable.
+
+Public-key authentication works through asymmetric cryptography. You generate a key pair: a private key that never leaves your machine, and a public key you copy to every server you need access to. When you connect, the server issues a cryptographic challenge that only the holder of the private key can answer correctly. No password is ever transmitted over the network. This means SSH keys are simultaneously more secure and more convenient than passwords — once you have them set up, authentication is instant and unforgeable.
+
+The SSH agent solves a practical problem: your private key should be encrypted with a passphrase, but you do not want to type that passphrase for every connection. `ssh-agent` runs as a background process in your session, holds your decrypted private key in memory, and answers authentication challenges on your behalf. `ssh-add` loads keys into the agent. When working across multiple servers or using agent forwarding (`ssh -A`), the agent allows you to authenticate to hosts you cannot reach directly without copying your private key to intermediate servers — a critical security practice.
 
 ```bash
 ssh user@hostname           # Connect to remote host
@@ -762,6 +825,29 @@ sudo snap refresh                  # Update all snaps
 
 Most Linux servers use `systemd` to manage services. You will need this for running web servers, databases, and container runtimes.
 
+Systemd replaced SysV init as the standard init system on most Linux distributions between 2012 and 2015. The core complaint about SysV was that its shell-script-based service definitions ran sequentially — each service started completely before the next began. Systemd introduced declarative unit files and a dependency graph, allowing services to start in parallel when their dependencies are satisfied. On a modern server, this cuts boot time from minutes to seconds.
+
+A unit file is a structured INI-format file that tells systemd everything about a service: what binary to run, what user to run as, what other units must be running first, when to restart on failure, and what environment to provide. The `[Unit]` section handles ordering and dependencies, `[Service]` handles runtime behavior, and `[Install]` controls how `systemctl enable` wires the unit into boot targets. Writing correct unit files — particularly getting `After=`, `Wants=`, and `Requires=` right — is a critical production skill.
+
+The journald logging subsystem is bundled with systemd and replaces plain text log files with a structured binary journal. Every line of output from every service is captured with metadata: timestamp, unit name, PID, severity level. `journalctl` queries this journal with filtering that would require complex log aggregation in a pre-systemd world. For production systems, you will typically ship journal logs to a central collector (Loki, Elasticsearch), but `journalctl` remains your first-line diagnostic tool.
+
+```mermaid
+flowchart LR
+    INACTIVE["inactive<br/>not running"]
+    ACTIVATING["activating<br/>starting up"]
+    ACTIVE["active<br/>running"]
+    DEACTIVATING["deactivating<br/>shutting down"]
+    FAILED["failed<br/>crashed or error"]
+
+    INACTIVE -->|"systemctl start"| ACTIVATING
+    ACTIVATING -->|"success"| ACTIVE
+    ACTIVATING -->|"error"| FAILED
+    ACTIVE -->|"systemctl stop"| DEACTIVATING
+    DEACTIVATING --> INACTIVE
+    ACTIVE -->|"crash"| FAILED
+    FAILED -->|"systemctl reset-failed"| INACTIVE
+```
+
 ```bash
 sudo systemctl start nginx      # Start a service
 sudo systemctl stop nginx       # Stop a service
@@ -983,6 +1069,37 @@ echo ".env.local" >> .gitignore
 ## Advanced: Linux Performance & Diagnostics
 
 ### CPU Performance
+
+The USE method — Utilization, Saturation, Errors — is the most systematic framework for diagnosing performance problems on Linux systems. Developed by Brendan Gregg, it provides a checklist you apply to every resource: CPU, memory, disk, and network. For each resource, ask three questions: how busy is it (utilization), is work queuing up waiting for it (saturation), and are errors occurring? A resource that is 100% utilized but shows no saturation is at capacity but not overloaded. A resource at 60% utilization with a saturating queue is already causing latency. Always check saturation before concluding a resource is fine.
+
+Load average is one of the most commonly misread metrics in Linux. The three numbers shown by `uptime` represent the average number of processes in a runnable or uninterruptible sleep state over 1, 5, and 15 minutes. The important comparison is against your number of CPU cores (from `nproc`). A load average of 4.0 on a single-core system means the system is overloaded; the same number on a 16-core system means it is mostly idle. Uninterruptible sleep (disk wait) is included in load average, so a high load with low CPU usage usually indicates I/O saturation rather than a compute bottleneck.
+
+Identifying the actual bottleneck requires correlating multiple data sources. Start with `top` to see if CPU is the constraint. If CPU is low but load is high, check `iostat -xz 1` for disk wait. If memory usage is high, check `vmstat 1 5` for swap activity (the `si`/`so` columns). For network issues, `ss -s` shows connection counts and errors. The goal is to exhaust hypotheses methodically — never guess at the root cause when the data is available.
+
+```mermaid
+flowchart TD
+    USE["USE Method"]
+    USE --> CPU["CPU"]
+    USE --> MEM["Memory"]
+    USE --> DISK["Disk"]
+    USE --> NET["Network"]
+
+    CPU --> CPU_U["Utilization<br/>top, mpstat"]
+    CPU --> CPU_S["Saturation<br/>load average, run queue"]
+    CPU --> CPU_E["Errors<br/>perf, dmesg"]
+
+    MEM --> MEM_U["Utilization<br/>free -h"]
+    MEM --> MEM_S["Saturation<br/>vmstat si/so, swapping"]
+    MEM --> MEM_E["Errors<br/>dmesg OOM killer"]
+
+    DISK --> DISK_U["Utilization<br/>iostat %util"]
+    DISK --> DISK_S["Saturation<br/>iostat await, iotop"]
+    DISK --> DISK_E["Errors<br/>smartctl, dmesg"]
+
+    NET --> NET_U["Utilization<br/>iftop, nethogs"]
+    NET --> NET_S["Saturation<br/>ss -s, drop counters"]
+    NET --> NET_E["Errors<br/>ip -s link, netstat"]
+```
 
 ```bash
 # Load average

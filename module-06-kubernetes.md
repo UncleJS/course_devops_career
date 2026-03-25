@@ -36,6 +36,47 @@ Kubernetes (K8s) is the industry-standard platform for running containerized app
 
 After learning containers in Module 05, Kubernetes is the natural next step — it answers the question: "How do I run hundreds of containers reliably in production?"
 
+```mermaid
+flowchart TD
+    subgraph "Control Plane"
+        API["kube-apiserver<br/>(REST API front door)"]
+        ETCD["etcd<br/>(cluster state store)"]
+        SCHED["kube-scheduler<br/>(pod placement)"]
+        CM["kube-controller-manager<br/>(reconciliation loops)"]
+        CCM["cloud-controller-manager<br/>(cloud provider integration)"]
+        API <--> ETCD
+        API --> SCHED
+        API --> CM
+        API --> CCM
+    end
+    subgraph "Worker Node 1"
+        KL1["kubelet"]
+        KP1["kube-proxy"]
+        CR1["containerd"]
+        P1A["Pod A"]
+        P1B["Pod B"]
+        KL1 --> CR1
+        CR1 --> P1A
+        CR1 --> P1B
+        KP1 --> P1A
+        KP1 --> P1B
+    end
+    subgraph "Worker Node 2"
+        KL2["kubelet"]
+        KP2["kube-proxy"]
+        CR2["containerd"]
+        P2A["Pod C"]
+        P2B["Pod D"]
+        KL2 --> CR2
+        CR2 --> P2A
+        CR2 --> P2B
+        KP2 --> P2A
+        KP2 --> P2B
+    end
+    API -->|"schedules pods"| KL1
+    API -->|"schedules pods"| KL2
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -67,6 +108,12 @@ By the end of this module you will be able to:
 ---
 
 ## Beginner: Kubernetes Architecture
+
+The control plane is the brain of the cluster. Every operational action — scheduling a pod, watching for failed nodes, reconciling desired state — flows through the control plane components. Understanding it demystifies what Kubernetes is actually doing when you run `kubectl apply`.
+
+The **API server** (`kube-apiserver`) is the only component that other components talk to directly. `etcd`, the scheduler, controller manager, kubelet on each worker node — they all communicate exclusively through the API server's REST interface. This single-gateway model makes it possible to add authentication, authorization, and admission control centrally, and it makes the system easier to audit. Nothing in the cluster changes state without going through the API server.
+
+**etcd** is not just a component — it IS the cluster. Every Kubernetes object (pods, deployments, services, secrets, configmaps) is stored as a key-value entry in etcd. If etcd becomes corrupt or unrecoverable, the cluster has no source of truth and cannot be restored without a backup. That is why etcd backup is non-negotiable in production: take consistent snapshots to an external store, and test restoration before you need it in an outage.
 
 ### Control Plane (Master)
 
@@ -128,6 +175,32 @@ minikube stop
 ---
 
 ## Beginner: Core Objects — Pods, Deployments, Services
+
+Almost every beginner asks the same question after creating their first Pod: "Why did it not restart when it crashed?" The answer is that a bare Pod has no self-healing controller watching over it. If the Pod is deleted, it is gone. If the node crashes, it is gone. Kubernetes can only self-heal objects that have a higher-level controller managing them.
+
+That is why you almost never create Pods directly in production. A **Deployment** wraps a **ReplicaSet** which manages the actual Pods. When a Pod dies, the ReplicaSet controller sees that the actual count is below the desired count and creates a replacement. When you do a rolling update, the Deployment creates a new ReplicaSet alongside the old one, scales it up, then scales the old one down. This layered design gives you updates, rollbacks, and self-healing with a single resource type.
+
+**Label selectors** are the glue that connects everything. A Deployment selects Pods by label, a Service selects Pods by label, a NetworkPolicy selects Pods by label. Labels are arbitrary key-value metadata on any Kubernetes object, and selectors are queries over those labels. The power of this system is that relationships are dynamic — a Service will start or stop routing to a Pod the moment its labels change to match or no longer match the selector, with no other configuration needed.
+
+```mermaid
+flowchart TD
+    DEP["Deployment<br/>(declares desired state)"]
+    RS["ReplicaSet<br/>(maintains replica count)"]
+    P1["Pod 1<br/>app: nginx"]
+    P2["Pod 2<br/>app: nginx"]
+    P3["Pod 3<br/>app: nginx"]
+    SVC["Service<br/>(stable network endpoint)"]
+    SEL["Label Selector<br/>app: nginx"]
+
+    DEP -->|"manages"| RS
+    RS -->|"manages"| P1
+    RS -->|"manages"| P2
+    RS -->|"manages"| P3
+    SVC --> SEL
+    SEL -->|"selects"| P1
+    SEL -->|"selects"| P2
+    SEL -->|"selects"| P3
+```
 
 ### Pod
 
@@ -372,6 +445,26 @@ data:
 ## Intermediate: Ingress & Load Balancing
 
 Kubernetes has a layered approach to routing external traffic into the cluster. Understanding all the layers — kube-proxy, Services, Ingress controllers, and the emerging Gateway API — lets you design the right solution for each situation.
+
+A **Service** provides a stable IP and DNS name for a set of Pods inside the cluster. But a Service of type `ClusterIP` is invisible from outside the cluster, and a `LoadBalancer` Service creates one cloud load balancer per service — which becomes expensive when you have twenty microservices. **Ingress** solves this by adding an HTTP routing layer: one load balancer at the edge routes to many services based on hostname and path rules.
+
+The distinction to internalize is that the **Ingress resource** is just a declarative description of routing rules. It does nothing by itself. An **Ingress Controller** (a separate deployment you install) reads those rules and implements them in a real proxy — nginx, Traefik, HAProxy, or a cloud-native ALB. Changing your Ingress controller does not require rewriting your Ingress resources, which is the point of the abstraction. The **Gateway API** takes this further by making the role separation explicit: cluster admins manage `GatewayClass` and `Gateway`, while application teams manage `HTTPRoute`. It also natively supports non-HTTP protocols and traffic weighting, which Ingress can only approximate through controller-specific annotations.
+
+```mermaid
+flowchart LR
+    INT["Internet"]
+    IC["Ingress Controller<br/>(nginx / Traefik / ALB)"]
+    SVC["Service<br/>(ClusterIP)"]
+    PA["Pod A"]
+    PB["Pod B"]
+    PC["Pod C"]
+
+    INT -->|"HTTP/HTTPS"| IC
+    IC -->|"routes by host/path"| SVC
+    SVC -->|"load balances"| PA
+    SVC -->|"load balances"| PB
+    SVC -->|"load balances"| PC
+```
 
 ### kube-proxy — How Services Work Under the Hood
 
@@ -775,6 +868,30 @@ spec:
 
 ## Intermediate: Health Checks & Self-Healing
 
+Kubernetes provides three probe types, and confusing them is one of the most common causes of production incidents. Each probe answers a different question and triggers a different action.
+
+A **liveness probe** asks: "Is this container alive?" If it fails repeatedly, kubelet restarts the container. This is your last resort for a stuck or deadlocked process. The critical mistake is using a liveness probe that also fails during startup. A slow-starting application will get its container killed and restarted before it ever finishes initializing, creating a restart loop that looks like the application is working intermittently when in reality it never gets a chance to start.
+
+A **readiness probe** asks: "Is this container ready to serve traffic?" If it fails, the Pod is removed from the Service endpoints. Traffic stops flowing to it, but the container is not restarted. This is the most important probe for avoiding user-visible errors during deployments or when a dependency (like a database connection) is temporarily unavailable. If you do not set a readiness probe, Kubernetes adds the Pod to the Service endpoint list as soon as it starts, even if the application has not finished initializing. The **startup probe** exists to bridge the gap: it disables the liveness check entirely until the startup probe passes, giving slow-starting containers (JVMs, legacy applications) the time they need.
+
+```mermaid
+flowchart LR
+    KL["kubelet"]
+    LP["liveness probe<br/>httpGet /healthz"]
+    RP["readiness probe<br/>httpGet /ready"]
+    FAIL3["3 consecutive failures"]
+    RESTART["restart container"]
+    RFAIL["probe fails"]
+    REMOVE["remove from<br/>Service endpoints"]
+
+    KL -->|"calls periodically"| LP
+    KL -->|"calls periodically"| RP
+    LP --> FAIL3
+    FAIL3 --> RESTART
+    RP --> RFAIL
+    RFAIL --> REMOVE
+```
+
 ```yaml
 spec:
   containers:
@@ -815,6 +932,29 @@ spec:
 ---
 
 ## Intermediate: Resource Management & Scaling
+
+Resource requests and limits are two distinct mechanisms that operate at different points in the pod lifecycle, and conflating them is a common source of mysterious performance problems.
+
+**Requests** are what the scheduler looks at. When the scheduler places a Pod onto a node, it asks: "Does this node have enough unallocated resources to satisfy the requested amount?" The actual current utilization of the node does not matter — only the sum of all Pods' requests. This means you can have a lightly loaded node that the scheduler refuses to place new Pods on because the sum of requests already equals the node's capacity. Requests should reflect the typical steady-state resource consumption of your application.
+
+**Limits** are enforced at runtime by the container runtime and the Linux kernel. If a container uses more memory than its limit, the kernel OOM-kills the process. If it uses more CPU than its limit, the kernel throttles it. Setting memory limits too low causes unpredictable OOMKill events even for briefly spiky workloads. Setting CPU limits too low causes hidden throttling that shows up as latency — the container appears healthy in terms of restarts but requests are slow because the kernel is rationing CPU time. For CPU-sensitive services, it is often safer to set CPU requests without setting CPU limits, so the container can burst to unused node capacity while still being scheduled correctly.
+
+```mermaid
+flowchart LR
+    MS["Metrics Server<br/>(CPU/memory usage)"]
+    HPA["HPA Controller"]
+    COMPARE["compare actual vs target<br/>utilization"]
+    UP["scale up<br/>(increase replicas)"]
+    DOWN["scale down<br/>(decrease replicas)"]
+    RS["ReplicaSet<br/>(manages pods)"]
+
+    MS -->|"reports metrics"| HPA
+    HPA --> COMPARE
+    COMPARE -->|"actual > target"| UP
+    COMPARE -->|"actual < target"| DOWN
+    UP -->|"update replicas"| RS
+    DOWN -->|"update replicas"| RS
+```
 
 ### Resource Requests & Limits
 

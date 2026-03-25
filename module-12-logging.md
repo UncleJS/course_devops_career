@@ -41,6 +41,26 @@
 
 Logs are the raw narrative of your system — every event, error, transaction, and state change produces log data. This module covers the full lifecycle: structured log emission, collection, shipping, indexing, querying, and retention. You will work with both the **ELK Stack** (Elasticsearch, Logstash, Kibana) and the **Loki Stack** (Loki, Promtail, Grafana) — the two dominant open-source centralized logging solutions.
 
+Logs and metrics serve different purposes and should not be used interchangeably. Metrics are designed to answer "how much" and "how often" questions across the whole system at low cost — they aggregate well and age gracefully. Logs are designed to answer "what happened" and "why" questions at the level of individual events. They are verbose, high-volume, and expensive to store at scale. This means log volume must be managed deliberately: at the emission level (choosing what to log), at the collection level (filtering and sampling where safe), and at the retention level (tiered storage and expiry policies). Teams that treat logs as infinitely cheap quickly discover that their logging infrastructure costs more than the application it monitors.
+
+The pipeline below shows how a log event travels from application to engineer. Each hop is an opportunity to add value (enrichment, parsing, indexing) and also a failure point (network loss, buffer overflow, disk fill). Understanding the full pipeline is why this module covers not just querying tools but also collection agents, routing, and retention.
+
+```mermaid
+flowchart LR
+    A["Application<br/>(emits log event)"]
+    B["Log Agent<br/>(Filebeat / Promtail / Fluent Bit)"]
+    C["Aggregator<br/>(Logstash / Fluentd / Loki)"]
+    D["Storage<br/>(Elasticsearch / Loki / S3)"]
+    E["Query / Visualise<br/>(Kibana / Grafana)"]
+    F["Engineer / On-call"]
+
+    A -->|"stdout / file"| B
+    B -->|"forward with buffer"| C
+    C -->|"parse, enrich, route"| D
+    D -->|"indexed, queryable"| E
+    E --> F
+```
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -133,7 +153,24 @@ Unstructured logs are human-readable but machine-hostile. Structured logs (JSON)
 
 Structured logging is one of the highest-leverage improvements a team can make because it changes logs from text blobs into queryable event records. Once logs are emitted as JSON or another consistent structure, you can filter by service, trace ID, request ID, user context, status code, or environment without relying on brittle regexes. That makes incident response faster and reduces the amount of manual parsing engineers do under pressure.
 
+The correlation ID pattern is where structured logging delivers its biggest operational payoff. When every log event emitted by every service in a request's path carries the same `trace_id` and `request_id`, you can reconstruct the full story of that request across all services by filtering on a single identifier. Without this, tracking a user-reported bug through a microservices system means grepping multiple log streams, mentally correlating timestamps, and guessing at causality. With it, the entire request chain collapses into one filtered view.
+
 The broader operational benefit is consistency across teams and languages. When Python, Node.js, and other services emit similar fields with similar meaning, central logging platforms can correlate events more effectively and dashboards become more reusable. This is especially important in distributed systems, where the difference between "we have logs" and "we have useful logs" is often whether common context fields exist everywhere.
+
+```mermaid
+flowchart LR
+    GEN["Generate<br/>(app emits JSON log)"]
+    COL["Collect<br/>(Filebeat / Promtail)"]
+    PARSE["Parse and Enrich<br/>(Logstash / Fluentd)"]
+    STORE["Index and Store<br/>(Elasticsearch / Loki)"]
+    QUERY["Query<br/>(Kibana / Grafana)"]
+    ALERT["Alert<br/>(Watcher / Grafana Alerting)"]
+    ARCH["Archive<br/>(S3 / cold tier)"]
+    EXPIRE["Expire<br/>(ILM / retention policy)"]
+
+    GEN --> COL --> PARSE --> STORE --> QUERY --> ALERT
+    STORE --> ARCH --> EXPIRE
+```
 
 ### Unstructured (avoid)
 
@@ -254,7 +291,25 @@ log.error({ orderId: 'ord-123', err: new Error('Card declined') }, 'Payment fail
 
 ELK is powerful because it treats logs as searchable documents rather than just archived text. That makes it a strong fit for environments where engineers, security teams, and auditors need to search deeply inside log content, build dashboards around fields, and retain large event histories with lifecycle controls. When operated well, ELK becomes both an operational troubleshooting tool and an investigation platform.
 
+Elasticsearch's core power comes from its inverted index. When a document is ingested, each unique term in each indexed field gets an entry in an index structure that maps the term to a list of document IDs. That is why full-text search on millions of log records is fast: you look up the term in the inverted index rather than scanning every record. The tradeoff is that every new indexed field increases the index size, and the phenomenon known as mapping explosion — where many dynamic fields all get indexed — is a common cause of Elasticsearch cluster degradation. The right mitigation is to define explicit mappings for known fields and to restrict dynamic mapping in production indices.
+
+Shards and replicas are the other key concept for operating Elasticsearch at scale. An index is divided into primary shards, and each shard can have replica shards on different nodes for redundancy. More shards means more parallelism for large indices; fewer shards means less overhead for small ones. A typical starting point is one primary shard per 10-50 GB of data, with one replica shard per primary. Over-sharding is a common mistake that wastes resources; the overhead of managing many small shards can exceed the gain.
+
 The tradeoff is that this flexibility has real cost. Elasticsearch clusters consume memory, index design matters, ingestion pipelines need tuning, and retention strategy can become expensive if left unmanaged. Teams adopt ELK successfully when the value of rich search and analytics outweighs the operational overhead. The sections below walk through each component so you can see where that complexity comes from and when it is justified.
+
+```mermaid
+flowchart TD
+    FB["Filebeat<br/>(on each host/pod)"]
+    LS["Logstash<br/>(parse, filter, enrich)"]
+    ES["Elasticsearch<br/>(inverted index, shards)"]
+    KB["Kibana<br/>(Discover, Dashboards, Alerts)"]
+    S3["S3 / Warm tier<br/>(ILM cold/frozen)"]
+
+    FB -->|"beats protocol"| LS
+    LS -->|"HTTP bulk API"| ES
+    ES --> KB
+    ES -->|"ILM rollover"| S3
+```
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -759,9 +814,29 @@ services:
 
 Loki is a horizontally scalable, highly available log aggregation system designed to be cost-effective and easy to operate. Unlike Elasticsearch, **Loki only indexes metadata (labels) — not log content**, making it much cheaper to store and operate.
 
+Loki's design philosophy is that most log analysis is a grep problem, not a search problem. Rather than building a rich inverted index over log content, Loki stores compressed log chunks in object storage and attaches metadata labels (service, namespace, pod, level, environment) to each stream. At query time, LogQL first filters by labels to identify matching streams, then applies regex or text filters within those streams. This means label selection is fast and cheap; content scanning is proportional to how much data the label filter returns. The implication is that good label design makes Loki performant, and bad label design makes it expensive.
+
+The trade-off versus Elasticsearch is explicit. ELK lets you write a free-text search like `error AND database AND timeout` and match against all ingested fields instantly because they are all indexed. Loki cannot do that efficiently unless the label filters first narrow the candidate streams substantially. Where Loki wins is total cost of ownership: no JVM heap to tune, object storage instead of SSD-backed nodes, and a simple operational model that fits teams already running the Prometheus/Grafana stack. For teams that primarily use logs for incident investigation and service correlation rather than security analytics or compliance search, Loki is often the better choice.
+
 Loki is a strong choice when the main goal is to correlate logs with metrics and traces without paying the full indexing cost of ELK. Its design assumes that many operational questions can be answered by filtering on labels such as service, namespace, pod, environment, or level, then scanning the matching log lines. That makes it especially attractive in Kubernetes-heavy environments where those labels already exist and where cost per gigabyte matters.
 
 The most important design implication is that label strategy becomes critical. Because Loki does not fully index message content, you need to think carefully about which metadata should be promoted to labels and which should remain inside the log body. Good labels make Loki fast and cheap. Bad labels either create high-cardinality performance problems or make the logs too hard to query effectively.
+
+```mermaid
+flowchart LR
+    PT["Promtail<br/>(tail + label log streams)"]
+    FB2["Fluent Bit<br/>(optional alternative)"]
+    LK["Loki<br/>(ingestor + querier)"]
+    CS["Object Storage<br/>(S3 / GCS — compressed chunks)"]
+    IDX["Index<br/>(labels only — BoltDB / Cassandra)"]
+    GR["Grafana<br/>(LogQL queries, explore)"]
+
+    PT -->|"push log streams"| LK
+    FB2 -->|"push log streams"| LK
+    LK --> CS
+    LK --> IDX
+    GR -->|"LogQL via HTTP"| LK
+```
 
 ### Loki Architecture
 
@@ -1230,7 +1305,34 @@ spec:
 
 Retention is where logging becomes a governance problem instead of just an engineering problem. Keeping every log forever is expensive and rarely necessary. Deleting logs too aggressively can break investigations, audit requirements, or post-incident analysis. A good retention policy therefore balances operational usefulness, legal obligations, security needs, and storage cost across different classes of logs.
 
+The regulatory landscape creates non-negotiable minimums for certain types of logs. GDPR in the EU requires audit logs demonstrating that personal data access was lawful; it also requires that personal data not be kept longer than necessary, which can conflict with "keep everything" approaches. HIPAA in healthcare mandates audit logs for six years. PCI-DSS for payment card data requires at least one year of audit log retention with three months immediately available. These requirements are not symmetric — they apply to specific log categories (authentication events, access to sensitive data, administrative actions), not every application log. Understanding which logs are in scope prevents both under-retention (compliance risk) and over-retention (unnecessary cost).
+
+The tiered storage pattern solves the cost problem without violating compliance. Hot storage (SSD-backed Elasticsearch nodes or Loki ingestors with local disk) holds the most recent logs where query latency is critical — typically seven to thirty days. Warm storage (larger, cheaper nodes or object storage) holds the medium-term window where logs are queried occasionally. Cold storage (object storage with infrequent access) holds the long-term compliance archive. Immutable audit logs — where no modification or deletion is possible, enforced by object-storage bucket policies or WORM storage — are required for compliance use cases and should be separated from operational logs in the pipeline design.
+
 Rotation is part of that same discipline. Even if logs are shipped centrally, local files and container streams still need guardrails so they do not fill disks or disappear before collectors can process them. The configurations below matter because they connect day-to-day system hygiene with long-term compliance posture.
+
+```mermaid
+flowchart TD
+    LOG["New log event"]
+    Q1{"Compliance-relevant?<br/>(auth, PII access, admin)"}
+    Q2{"Age?"}
+    HOT["Hot storage<br/>(0-30 days, fast query)"]
+    WARM["Warm storage<br/>(30-90 days, slower)"]
+    COLD["Cold archive<br/>(90 days - 7 years, S3/WORM)"]
+    OPS["Operational storage<br/>(rotate after 7-30 days)"]
+    DEL["Delete<br/>(after retention expires)"]
+    IMM["Immutable archive<br/>(compliance copy, no delete)"]
+
+    LOG --> Q1
+    Q1 -->|"Yes"| IMM
+    Q1 -->|"No"| OPS
+    OPS --> Q2
+    Q2 -->|"recent"| HOT
+    Q2 -->|"medium"| WARM
+    Q2 -->|"old"| COLD
+    COLD --> DEL
+    IMM -.->|"after legal minimum"| DEL
+```
 
 ### Log rotation — logrotate
 

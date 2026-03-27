@@ -2065,4 +2065,1790 @@ kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 909
 
 ---
 
+## OpenTelemetry Deep Dive
+
+OpenTelemetry (OTel) is the CNCF project that standardises how applications emit telemetry: traces, metrics, and logs. Before OTel, each observability vendor had its own SDK. Switching from Datadog to Grafana Cloud meant rewriting all your instrumentation. OTel changes this: you instrument once, then route to any backend.
+
+### Core Concepts
+
+**Signals**: The three primary telemetry signals in OTel are traces, metrics, and logs. A fourth signal, profiles, is in active development.
+
+**SDK**: The language-specific library your application imports. You initialise it once at startup and it instruments your code, often automatically (zero-code instrumentation for HTTP frameworks, database drivers, etc.).
+
+**Collector**: A standalone process that receives telemetry from your services, processes it (filtering, sampling, enriching), and exports to one or more backends. You can run it as a sidecar, a DaemonSet, or a central gateway.
+
+**OTLP**: The OpenTelemetry Protocol — the wire format for sending telemetry between services, SDKs, and the Collector. Runs over gRPC (default port 4317) or HTTP (default port 4318).
+
+### SDK Initialisation (Go)
+
+```go
+// internal/telemetry/setup.go
+package telemetry
+
+import (
+    "context"
+    "fmt"
+    "time"
+
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+    "go.opentelemetry.io/otel/propagation"
+    "go.opentelemetry.io/otel/sdk/resource"
+    sdktrace "go.opentelemetry.io/otel/sdk/trace"
+    semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
+)
+
+func InitTracer(ctx context.Context, serviceName, version string) (func(context.Context) error, error) {
+    res, err := resource.New(ctx,
+        resource.WithAttributes(
+            semconv.ServiceName(serviceName),
+            semconv.ServiceVersion(version),
+            semconv.DeploymentEnvironment("production"),
+        ),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("creating resource: %w", err)
+    }
+
+    conn, err := grpc.DialContext(ctx,
+        "otel-collector:4317",
+        grpc.WithTransportCredentials(insecure.NewCredentials()),
+        grpc.WithBlock(),
+        grpc.WithTimeout(5*time.Second),
+    )
+    if err != nil {
+        return nil, fmt.Errorf("connecting to collector: %w", err)
+    }
+
+    traceExporter, err := otlptracegrpc.New(ctx, otlptracegrpc.WithGRPCConn(conn))
+    if err != nil {
+        return nil, fmt.Errorf("creating trace exporter: %w", err)
+    }
+
+    tp := sdktrace.NewTracerProvider(
+        sdktrace.WithBatcher(traceExporter),
+        sdktrace.WithResource(res),
+        sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(0.1))),
+    )
+
+    otel.SetTracerProvider(tp)
+    otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+        propagation.TraceContext{},
+        propagation.Baggage{},
+    ))
+
+    return tp.Shutdown, nil
+}
+```
+
+```go
+// main.go
+func main() {
+    ctx := context.Background()
+    
+    shutdown, err := telemetry.InitTracer(ctx, "payment-service", "v2.3.1")
+    if err != nil {
+        log.Fatalf("Failed to initialise tracer: %v", err)
+    }
+    defer func() {
+        if err := shutdown(ctx); err != nil {
+            log.Printf("Error shutting down tracer: %v", err)
+        }
+    }()
+    
+    // ... rest of startup
+}
+```
+
+### Auto-Instrumentation for HTTP and Database
+
+```go
+// Wrap your HTTP router with OTel middleware
+import (
+    "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+)
+
+handler := otelhttp.NewHandler(mux, "payment-service",
+    otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+)
+
+// Wrap database calls
+import (
+    "go.opentelemetry.io/contrib/instrumentation/database/sql/otelsql"
+    "database/sql"
+)
+
+db, err := otelsql.Open("postgres", dsn,
+    otelsql.WithAttributes(semconv.DBSystemPostgreSQL),
+    otelsql.WithSpanOptions(otelsql.SpanOptions{
+        Ping:              true,
+        RowsNext:          false,  // too noisy for high-volume queries
+        DisableErrSkip:    true,
+    }),
+)
+```
+
+### OTel Collector Configuration
+
+```yaml
+# otel-collector-config.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # Collect host metrics (CPU, memory, disk, network)
+  hostmetrics:
+    collection_interval: 30s
+    scrapers:
+      cpu:
+      memory:
+      disk:
+      network:
+      load:
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+  # Add environment metadata to all telemetry
+  resource:
+    attributes:
+    - key: deployment.environment
+      value: production
+      action: upsert
+    - key: cloud.region
+      from_attribute: CLOUD_REGION
+      action: insert
+
+  # Tail-based sampling — send only interesting traces
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 100000
+    policies:
+    - name: errors-policy
+      type: status_code
+      status_code: {status_codes: [ERROR]}
+    - name: slow-traces-policy
+      type: latency
+      latency: {threshold_ms: 1000}
+    - name: probabilistic-policy
+      type: probabilistic
+      probabilistic: {sampling_percentage: 1}
+
+  memory_limiter:
+    limit_mib: 512
+    spike_limit_mib: 128
+    check_interval: 5s
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo.monitoring.svc.cluster.local:4317
+    tls:
+      insecure: true
+
+  prometheusremotewrite:
+    endpoint: http://mimir.monitoring.svc.cluster.local:9009/api/v1/push
+
+  loki:
+    endpoint: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource, tail_sampling]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp, hostmetrics]
+      processors: [memory_limiter, batch, resource]
+      exporters: [prometheusremotewrite]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [loki]
+```
+
+### Tail-Based Sampling Explained
+
+Head-based sampling (deciding whether to sample when a request starts) is simple but blind — you might drop the one slow request that mattered. Tail-based sampling keeps all spans in memory, waits until the full trace arrives, then decides based on what actually happened:
+
+- Was there an error? Keep it.
+- Was it slow (> 1 second)? Keep it.
+- Is it just a boring fast success? Keep 1 in 100.
+
+This means your storage contains exactly the interesting traces, not a random 1 % sample. The trade-off is memory: the Collector must buffer all spans until the trace is complete (the `decision_wait` window).
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## SLO Burn Rate Alerting
+
+Alerting directly on error rate thresholds is unreliable: it fires too often for minor blips (alert fatigue) and too slowly for catastrophic failures (you burned 10 % of your error budget before anyone woke up). SLO burn rate alerting fixes both problems.
+
+### The Math
+
+If your SLO is 99.9 % availability over 30 days, your error budget is 0.1 % of 43,200 minutes = 43.2 minutes of downtime.
+
+A burn rate of 1× means you are consuming budget at exactly the rate that will exhaust it in 30 days. A burn rate of 14.4× means you will exhaust the entire 30-day budget in 2 hours.
+
+The multi-window, multi-burn-rate approach from the Google SRE Workbook uses two alert tiers:
+
+| Burn Rate | Window | Budget Consumed | Severity | Page? |
+|-----------|--------|-----------------|----------|-------|
+| 14.4× | 1h | 2 % | Critical | Yes — immediate |
+| 6× | 6h | 5 % | Warning | Yes — business hours |
+| 3× | 1d | 10 % | Info | Ticket |
+| 1× | 3d | 10 % | — | Dashboard only |
+
+### Prometheus Recording and Alert Rules
+
+```yaml
+# prometheus/recording-rules/slo.yml
+groups:
+- name: slo_recordings
+  interval: 30s
+  rules:
+  # Request success rate over short and long windows
+  - record: job:slo_errors:rate1h
+    expr: |
+      sum(rate(http_requests_total{status=~"5.."}[1h])) by (job)
+      /
+      sum(rate(http_requests_total[1h])) by (job)
+
+  - record: job:slo_errors:rate5m
+    expr: |
+      sum(rate(http_requests_total{status=~"5.."}[5m])) by (job)
+      /
+      sum(rate(http_requests_total[5m])) by (job)
+
+  - record: job:slo_errors:rate6h
+    expr: |
+      sum(rate(http_requests_total{status=~"5.."}[6h])) by (job)
+      /
+      sum(rate(http_requests_total[6h])) by (job)
+
+  - record: job:slo_errors:rate1d
+    expr: |
+      sum(rate(http_requests_total{status=~"5.."}[1d])) by (job)
+      /
+      sum(rate(http_requests_total[1d])) by (job)
+
+---
+# prometheus/alert-rules/slo.yml
+groups:
+- name: slo_alerts
+  rules:
+  # Critical: fast burn (2% budget in 1h)
+  - alert: SLOErrorBudgetBurnRateCritical
+    expr: |
+      (
+        job:slo_errors:rate1h{job="payment-service"} > (14.4 * 0.001)
+        and
+        job:slo_errors:rate5m{job="payment-service"} > (14.4 * 0.001)
+      )
+    for: 2m
+    labels:
+      severity: critical
+      slo: availability
+    annotations:
+      summary: "SLO critical burn rate: payment-service"
+      description: >
+        Error rate is {{ $value | humanizePercentage }} over the last hour.
+        At this rate, the 30-day error budget will be exhausted in
+        {{ printf "%.1f" (div 2.0 (mul $value 100.0)) }} hours.
+      runbook: "https://runbooks.company.com/slos/burn-rate-critical"
+
+  # Warning: slow burn (5% budget in 6h)
+  - alert: SLOErrorBudgetBurnRateWarning
+    expr: |
+      (
+        job:slo_errors:rate6h{job="payment-service"} > (6 * 0.001)
+        and
+        job:slo_errors:rate1h{job="payment-service"} > (6 * 0.001)
+      )
+    for: 15m
+    labels:
+      severity: warning
+      slo: availability
+    annotations:
+      summary: "SLO warning burn rate: payment-service"
+```
+
+### Error Budget Policy
+
+An error budget policy defines what happens when budget is consumed:
+
+- **> 50 % budget remaining**: deploy freely, run experiments
+- **25–50 % remaining**: code freeze on risky changes; prioritise reliability work
+- **< 25 % remaining**: no feature deploys; all engineering capacity on reliability
+- **Budget exhausted**: incident review required before any production change
+
+Document this policy in a shared `SLO.md` and link to it from your team runbook.
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Prometheus Federation and Thanos
+
+A single Prometheus instance can scrape thousands of metrics but has limited retention and no global query view. When you run multiple Kubernetes clusters, you need either Prometheus Federation or Thanos.
+
+### Prometheus Federation
+
+Federation lets one Prometheus (the global instance) scrape aggregated metrics from multiple leaf Prometheus instances. It is simple but has limitations: the global instance only gets pre-aggregated data, and it creates a single point of failure for global queries.
+
+```yaml
+# prometheus.yml — global Prometheus
+scrape_configs:
+- job_name: 'federate-eu-west-1'
+  scrape_interval: 60s
+  honor_labels: true
+  metrics_path: /federate
+  params:
+    match[]:
+    - '{job="payment-service"}'
+    - '{job="user-service"}'
+    - 'up'
+  static_configs:
+  - targets:
+    - 'prometheus-eu-west-1.monitoring.svc.cluster.local:9090'
+    - 'prometheus-us-east-1.monitoring.svc.cluster.local:9090'
+```
+
+Federation is adequate for small multi-cluster setups. For large-scale or long-retention requirements, use Thanos.
+
+### Thanos Architecture
+
+Thanos extends Prometheus with:
+- **Sidecar**: runs alongside each Prometheus, uploads TSDB blocks to object storage (S3, GCS) every 2 hours
+- **Store Gateway**: serves historical data from object storage
+- **Querier**: global query endpoint that federates across all Thanos components using Prometheus-compatible API
+- **Compactor**: downsamples and compacts old data in object storage
+- **Ruler**: evaluates recording/alerting rules against the global view
+
+```yaml
+# thanos-sidecar.yaml (added to kube-prometheus-stack Prometheus)
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  replicas: 2
+  retention: 2h          # short local retention; long-term in object storage
+  
+  thanos:
+    image: quay.io/thanos/thanos:v0.35.0
+    objectStorageConfig:
+      secret:
+        name: thanos-objstore-config
+        key: objstore.yml
+```
+
+```yaml
+# thanos-objstore-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: thanos-objstore-config
+  namespace: monitoring
+stringData:
+  objstore.yml: |
+    type: S3
+    config:
+      bucket: company-thanos-metrics
+      endpoint: s3.eu-west-1.amazonaws.com
+      region: eu-west-1
+      sse_config:
+        type: SSE-S3
+```
+
+With Thanos you get:
+- **Unlimited retention** (object storage is cheap; S3 costs ~$0.023/GB/month)
+- **Global query view**: one Grafana datasource for all clusters
+- **High availability**: two Prometheus replicas per cluster; Thanos deduplicates
+- **Downsampling**: 5-minute and 1-hour resolution for old data, reducing query cost
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Grafana Mimir
+
+Grafana Mimir is the horizontally scalable successor to Cortex, designed to ingest millions of active series and serve instant and range queries with high availability. It is fully Prometheus-compatible and supports remote write from any Prometheus.
+
+### When to Use Mimir vs Thanos
+
+- Use **Thanos** when you already have Prometheus and want to add long-term storage without a major architecture change. Lower operational complexity.
+- Use **Mimir** when you need to ingest metrics from many sources at high velocity, need sub-second query response at scale, or want multi-tenancy (separate metric namespaces per team or customer).
+
+### Mimir Quick Start with Kubernetes
+
+```yaml
+# mimir-single-process.yaml (development / small production)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mimir
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mimir
+  template:
+    metadata:
+      labels:
+        app: mimir
+    spec:
+      containers:
+      - name: mimir
+        image: grafana/mimir:2.12.0
+        args:
+        - -config.file=/etc/mimir/config.yaml
+        - -target=all
+        ports:
+        - name: http
+          containerPort: 9009
+        volumeMounts:
+        - name: config
+          mountPath: /etc/mimir
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: config
+        configMap:
+          name: mimir-config
+      - name: data
+        persistentVolumeClaim:
+          claimName: mimir-data
+```
+
+```yaml
+# mimir-config.yaml
+multitenancy_enabled: false
+
+blocks_storage:
+  backend: s3
+  s3:
+    bucket_name: company-mimir-blocks
+    endpoint: s3.eu-west-1.amazonaws.com
+    region: eu-west-1
+  tsdb:
+    dir: /data/tsdb
+
+compactor:
+  data_dir: /data/compactor
+
+ruler_storage:
+  backend: s3
+  s3:
+    bucket_name: company-mimir-ruler
+    endpoint: s3.eu-west-1.amazonaws.com
+    region: eu-west-1
+
+alertmanager_storage:
+  backend: s3
+  s3:
+    bucket_name: company-mimir-alertmanager
+    endpoint: s3.eu-west-1.amazonaws.com
+    region: eu-west-1
+```
+
+```yaml
+# prometheus.yml — remote write to Mimir
+remote_write:
+- url: http://mimir.monitoring.svc.cluster.local:9009/api/v1/push
+  queue_config:
+    capacity: 10000
+    max_shards: 30
+    max_samples_per_send: 2000
+  write_relabel_configs:
+  - source_labels: [__name__]
+    regex: 'go_.*|process_.*'
+    action: drop    # drop noisy Go runtime metrics to save cost
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Alertmanager Advanced Configuration
+
+The default Alertmanager configuration sends every alert to one destination. In production you need routing trees, inhibition, silences, and templates that produce actionable notifications.
+
+### Routing Trees
+
+```yaml
+# alertmanager.yml
+global:
+  resolve_timeout: 5m
+  slack_api_url: 'https://hooks.slack.com/services/...'
+  pagerduty_url: 'https://events.pagerduty.com/v2/enqueue'
+
+route:
+  receiver: default-receiver
+  group_by: [alertname, cluster, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  
+  routes:
+  # Critical alerts page on-call immediately
+  - match:
+      severity: critical
+    receiver: pagerduty-production
+    group_wait: 10s
+    group_interval: 1m
+    repeat_interval: 1h
+    continue: true   # also send to Slack
+    
+  # Critical also goes to Slack
+  - match:
+      severity: critical
+    receiver: slack-critical
+    
+  # Warning alerts go to Slack only during business hours
+  - match:
+      severity: warning
+    receiver: slack-warning
+    active_time_intervals:
+    - business-hours
+    
+  # Database alerts go to DBA on-call
+  - match:
+      team: database
+    receiver: pagerduty-dba
+    
+  # Security alerts go to security team
+  - match:
+      team: security
+    receiver: slack-security
+    routes:
+    - match:
+        severity: critical
+      receiver: pagerduty-security
+
+time_intervals:
+- name: business-hours
+  time_intervals:
+  - weekdays: [monday:friday]
+    times:
+    - start_time: "09:00"
+      end_time: "18:00"
+
+inhibit_rules:
+# If a cluster is down, suppress all service alerts for that cluster
+- source_match:
+    alertname: ClusterDown
+  target_match_re:
+    alertname: .*
+  equal: [cluster]
+
+# If a node is down, suppress pod restart alerts on that node
+- source_match:
+    alertname: NodeDown
+  target_match:
+    alertname: PodCrashLooping
+  equal: [node]
+```
+
+### Alert Templates
+
+Default Alertmanager notifications contain raw labels with no context. Custom templates make alerts actionable at a glance:
+
+```
+{{ define "slack.company.title" -}}
+  [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}
+  {{- if .CommonLabels.service }} — {{ .CommonLabels.service }}{{ end }}
+{{- end }}
+
+{{ define "slack.company.text" -}}
+  {{- range .Alerts }}
+  *Summary*: {{ .Annotations.summary }}
+  *Description*: {{ .Annotations.description }}
+  *Severity*: {{ .Labels.severity }}
+  *Started*: {{ .StartsAt | since }}
+  {{- if .Annotations.runbook }}
+  *Runbook*: <{{ .Annotations.runbook }}|View runbook>
+  {{- end }}
+  {{- if .GeneratorURL }}
+  *Query*: <{{ .GeneratorURL }}|View in Prometheus>
+  {{- end }}
+  {{- end }}
+{{- end }}
+```
+
+### Silences and Maintenance Windows
+
+```bash
+# Create a silence via amtool (during planned maintenance)
+amtool silence add \
+  --alertmanager.url=http://alertmanager:9093 \
+  --duration=2h \
+  --comment="Planned maintenance: database upgrade JIRA-5678" \
+  alertname=".*" cluster="prod-eu-west-1"
+
+# List active silences
+amtool silence query --alertmanager.url=http://alertmanager:9093
+
+# Expire a silence early
+amtool silence expire --alertmanager.url=http://alertmanager:9093 <silence-id>
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## eBPF-Based Observability
+
+eBPF (extended Berkeley Packet Filter) allows you to run sandboxed programs in the Linux kernel without modifying kernel source code or loading kernel modules. For observability, this means zero-instrumentation visibility into network calls, system calls, CPU scheduling, and memory operations — no SDK required.
+
+### Why eBPF Changes Observability
+
+Traditional APM requires a language agent in your application. eBPF agents run at the kernel level and can observe everything: unmodified legacy binaries, containers without source code access, encrypted traffic (before TLS encryption, from the application's perspective), and system-level operations that application-level agents cannot see.
+
+The trade-offs: eBPF requires a modern kernel (5.8+ for most features), root or `CAP_BPF` capability, and the eBPF programs themselves must be verified (the kernel verifier rejects unsafe programs). Privileged access on Kubernetes means a DaemonSet with `privileged: true` — this must be carefully scoped.
+
+### Cilium Hubble for Network Observability
+
+Hubble provides network-level observability using Cilium's eBPF data plane:
+
+```bash
+# Install Cilium with Hubble enabled
+helm install cilium cilium/cilium \
+  --namespace kube-system \
+  --set hubble.enabled=true \
+  --set hubble.relay.enabled=true \
+  --set hubble.ui.enabled=true \
+  --set hubble.metrics.enabled="{dns,drop,tcp,flow,icmp,http}"
+
+# Install Hubble CLI
+HUBBLE_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/hubble/master/stable.txt)
+curl -L --remote-name-all \
+  https://github.com/cilium/hubble/releases/download/$HUBBLE_VERSION/hubble-linux-amd64.tar.gz
+tar xzvf hubble-linux-amd64.tar.gz
+sudo mv hubble /usr/local/bin
+
+# Observe live traffic
+hubble observe --namespace production
+
+# Filter by service
+hubble observe --namespace production \
+  --from-pod payment-service \
+  --protocol http \
+  --verdict DROPPED
+
+# Check DNS failures
+hubble observe --namespace production \
+  --protocol dns \
+  --verdict DROPPED
+```
+
+Hubble can reveal:
+- Services making unexpected outbound connections (potential data exfiltration or misconfigured services)
+- DNS failures that look like application errors
+- Network policy drops that are silently blocking legitimate traffic
+- Latency between services without any code changes
+
+### Pixie for Application-Level eBPF Observability
+
+Pixie traces HTTP, gRPC, MySQL, PostgreSQL, Redis, and Kafka traffic without application instrumentation:
+
+```bash
+# Install Pixie
+px deploy
+
+# View request traces for a service (no SDK needed)
+px run px/http_data -- --start_time="-5m" --namespace=production
+
+# View slow database queries
+px run px/mysql_stats -- --start_time="-15m"
+
+# View network connections
+px run px/net_flow_graph -- --namespace=production
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Incident Management and Runbooks
+
+Monitoring is only valuable if it leads to effective incident response. The alert fires — then what? Teams that invest in runbooks, blameless postmortems, and on-call process improvements resolve incidents faster and have fewer repeat incidents.
+
+### Anatomy of a Good Runbook
+
+A runbook answers: what do I do right now? Not a tutorial on how the system works — a concrete action guide for someone who may have been woken up at 3 AM.
+
+```markdown
+# Runbook: SLOErrorBudgetBurnRateCritical — payment-service
+
+## Severity: Critical (pages on-call immediately)
+
+## Impact
+Customers are experiencing payment failures at an elevated rate.
+The 30-day error budget will be exhausted in < 2 hours if this continues.
+
+## Immediate actions (first 5 minutes)
+
+1. Acknowledge the PagerDuty alert
+2. Check error rate dashboard:
+   https://grafana.company.com/d/payment-service?from=now-30m
+3. Check recent deployments:
+   gh run list --repo company/payment-service --limit 5
+4. Check pod status:
+   kubectl get pods -n production -l app=payment-service
+   kubectl logs -n production -l app=payment-service --since=5m | grep -i error
+
+## Decision tree
+
+**If a deployment happened in the last 60 minutes:**
+- Roll back immediately:
+  kubectl rollout undo deployment/payment-service -n production
+- Notify #deployments channel with rollback details
+- Monitor error rate for 5 minutes after rollback
+
+**If no recent deployment:**
+- Check upstream dependencies (Stripe API status page)
+- Check database connection pool:
+  kubectl exec -n production deploy/payment-service -- \
+    curl -s localhost:8080/debug/metrics | grep db_pool
+- Check for increased load (traffic spike):
+  Grafana dashboard → "Request Rate" panel
+
+## Escalation
+- If unresolved after 15 minutes: page the payment-service team lead
+- If payment processor (Stripe) is the root cause: notify finance team
+- If data loss is suspected: escalate to CTO immediately
+
+## Post-incident
+- File incident report within 24 hours
+- Schedule blameless postmortem within 3 business days
+- Update this runbook with any new findings
+```
+
+### Blameless Postmortems
+
+A blameless postmortem focuses on system failures, not individual failures. The question is not "who made the mistake?" but "what conditions allowed this mistake to have this impact?".
+
+Postmortem template:
+1. **Incident summary** — one paragraph, plain language, suitable for non-engineers
+2. **Timeline** — chronological events with exact timestamps; who detected what, when; what actions were taken
+3. **Root cause** — the technical chain of events that led to the incident
+4. **Contributing factors** — what conditions (monitoring gaps, process gaps, complexity) made it worse or made diagnosis harder
+5. **What went well** — acknowledge what worked: fast detection, good on-call response, effective rollback
+6. **Action items** — concrete tasks with owners and due dates; each item should prevent recurrence or reduce impact
+
+The rule for action items: if an item is "add monitoring for X", it is not done when the Prometheus rule is added — it is done when the alert has fired and been verified in a staging test.
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Common Mistakes & Pitfalls
+
+- **Alerting on symptoms instead of causes.** Alerting on CPU > 80 % is a symptom. Alerting on request error rate > 1 % is a symptom your users experience. Prefer user-facing symptoms for pages; use resource metrics for capacity planning.
+- **Setting alert thresholds without historical data.** Setting p99 latency alerts at 200 ms without knowing your baseline means the alert either fires constantly or never fires usefully. Always derive thresholds from at least two weeks of production data.
+- **Too many pages.** If your on-call engineer gets more than three pages per shift, they will start ignoring pages or lowering alert severity — the definition of alert fatigue. Aim for fewer than five actionable alerts per week per on-call.
+- **Dashboards without purpose.** A Grafana dashboard with 50 panels is not useful — it is noise. Build dashboards for specific use cases: on-call investigation, SLO tracking, capacity review. Each dashboard should answer a specific question.
+- **Not testing alerts.** Alerts that have never fired may not work. Periodically inject synthetic errors to verify that your alerting pipeline (Prometheus → Alertmanager → PagerDuty → phone) works end-to-end.
+- **Long-term storage afterthought.** Prometheus default retention is 15 days. After an incident, you often need 30, 60, or 90 days of data. Set up Thanos or Mimir before you need it.
+- **Ignoring cardinality.** High-cardinality labels (user ID, request ID, URL path with path parameters) can cause Prometheus to OOM. Instrument with bounded cardinality: use fixed label values like `endpoint` (not `url`), `status_code` (not full response body).
+- **Tracing without sampling strategy.** Sending 100 % of traces for a 10,000 RPS service means millions of spans per minute. Head-based sampling at 1 % is better than nothing, but tail-based sampling is best — keep errors and slow traces, drop boring successful ones.
+- **Missing the business layer.** Low-level metrics (CPU, memory, network) are necessary but not sufficient. Add business metrics: payments processed, orders per minute, active sessions. These are what stakeholders care about and often detect problems before infrastructure metrics do.
+- **Not correlating signals.** A 5 % error rate spike means nothing without context. Did it start when a deployment went out? When traffic spiked? When the database failover happened? Logs, traces, and metrics must be correlated by timestamp and trace ID to answer these questions.
+- **Runbooks that go stale.** A runbook updated 18 months ago may reference commands that no longer work or services that no longer exist. Treat runbooks as code: review them after every incident and schedule a quarterly audit.
+- **PagerDuty rotation without training.** Adding engineers to on-call without a shadowing period or access to runbooks guarantees extended incidents. Always shadow before you go on-call solo.
+- **Forgetting synthetic monitoring.** Active monitoring (periodically hitting your endpoints from external locations) detects problems that internal metrics miss: expired TLS certificates, DNS failures, CDN issues, geographic routing problems.
+- **Alert routing gaps.** Your routing rules in Alertmanager route `team: database` to the DBA. What happens when a new service fires an alert without a `team` label? The alert goes to the default receiver — which may be a black hole if not configured. Always test your routing with `amtool config routes test`.
+- **Treating observability as a one-time setup.** Observability is not a project you complete. Every new service, every new feature, every new dependency needs monitoring added as part of the same pull request. Make it part of your Definition of Done.
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Interview Prep
+
+**Q1: What is the difference between monitoring and observability?**
+Monitoring is the practice of collecting and alerting on predefined metrics and states — you know what to look for in advance. Observability is the property of a system that allows you to understand its internal state from its external outputs (metrics, logs, traces). An observable system lets you ask new questions you did not think of beforehand. Monitoring is what you do; observability is a property of the system that makes monitoring effective.
+
+**Q2: Explain the four golden signals.**
+The four golden signals (from the Google SRE book) are: latency (how long requests take, including failed requests), traffic (demand on the system — requests per second, transactions per minute), errors (rate of failed requests, including explicit failures and implicit ones like HTTP 200 with wrong content), and saturation (how "full" a resource is — CPU, memory, connection pool utilisation). These four signals give you a complete picture of service health without drowning in metrics.
+
+**Q3: What is an SLO, and how does it differ from an SLA?**
+An SLO (Service Level Objective) is an internal target: "99.9 % of requests return successfully within 200 ms." It is a commitment your team makes to itself and your users. An SLA (Service Level Agreement) is a contractual commitment to a customer with penalties for breach. SLOs should be stricter than SLAs — you want to know you are approaching the SLA threshold before you breach it. Error budgets are derived from SLOs.
+
+**Q4: What is the OpenTelemetry Collector and why would you use it?**
+The OTel Collector is a vendor-agnostic proxy for telemetry data. Instead of every application sending data directly to a backend (Datadog, Jaeger, Prometheus), applications send OTLP to the Collector, which processes and exports to one or more backends. Benefits: vendor switching without code changes, centralised sampling and filtering, buffering and retry logic, and resource enrichment (adding cluster/environment labels to all telemetry).
+
+**Q5: What is tail-based sampling, and how does it differ from head-based sampling?**
+Head-based sampling decides whether to record a trace when it starts. Simple to implement but blind — you may drop the slow or errored trace that mattered. Tail-based sampling buffers spans in the Collector and decides after the entire trace arrives, based on what actually happened: was there an error? Was it slow? This lets you keep 100 % of interesting traces and drop 99 % of boring ones, but requires the Collector to hold many spans in memory during the decision window.
+
+**Q6: How would you set up alerting that avoids both alert fatigue and missed incidents?**
+Use SLO-based burn rate alerting instead of threshold alerting. Two tiers: critical (fast burn — 2 % error budget in 1 hour, page immediately) and warning (slow burn — 5 % in 6 hours, notify during business hours). This approach generates fewer false positives because burn rate smooths over transient spikes, while still catching catastrophic failures quickly. Complement with good inhibition rules to suppress downstream alerts when an upstream dependency is the root cause.
+
+**Q7: Explain Prometheus scraping and how it differs from push-based metrics.**
+Prometheus is pull-based: the Prometheus server initiates HTTP requests to `/metrics` endpoints on configured targets at each `scrape_interval`. This model gives the Prometheus server full control of collection rate, makes it easy to detect when a target disappears, and avoids the "push storm" problem where many services hammer a central endpoint simultaneously. Push-based systems (Graphite, InfluxDB, StatsD) accept data sent by the application, which can be better for short-lived jobs (use Pushgateway for these with Prometheus) and NAT-traversal scenarios.
+
+**Q8: What is cardinality in Prometheus, and why does it matter?**
+Cardinality is the number of unique time series: the cross-product of all label value combinations. A metric `http_requests_total` with labels `service` (10 values) × `endpoint` (50 values) × `status` (10 values) = 5,000 series. If you add `user_id` as a label with 1 million users, you get 5 billion series — Prometheus will OOM. High-cardinality labels include user IDs, request IDs, unparameterised URL paths, and session tokens. Always use bounded cardinality: parameterise paths (`/users/{id}` not `/users/12345`), never include request IDs.
+
+**Q9: How does Grafana Mimir differ from vanilla Prometheus?**
+Prometheus is a single-process time series database optimised for a single node. Mimir is horizontally scalable, separating ingestion, querying, and storage into independent microservices that scale independently. Mimir supports multi-tenancy (separate namespaces per team or customer), stores blocks in object storage (unlimited retention), and is Prometheus API-compatible. Use vanilla Prometheus for a single cluster with < 1M active series; use Mimir when you need global scale, multi-cluster aggregation, or long-term retention.
+
+**Q10: Walk me through how you would investigate a spike in p99 latency.**
+Start with the Grafana overview dashboard — confirm the spike is real and identify the time range. Check whether it correlates with a deployment (look at deployment markers on the dashboard). Examine the service's error rate simultaneously — is it latency without errors (overload, slow dependency) or latency with errors (bug)? Use distributed tracing (Tempo/Jaeger) to find slow traces from that window — look for which span is slow: is it in your service or a downstream call? If it is a downstream call (database, external API), check that service's metrics. If it is internal, look at CPU and memory saturation, connection pool size, and GC pause duration. Correlate with logs for error messages from that time window.
+
+**Q11: What is Hubble, and what visibility does it provide?**
+Hubble is the network observability component of Cilium, implemented using eBPF. It provides layer 3/4 (IP, TCP) and layer 7 (HTTP, gRPC, DNS, Kafka) visibility into traffic between pods without requiring application instrumentation. You can observe which services talk to which, see HTTP request details (method, path, status code), identify DNS failures, and detect network policy violations — all without changing application code. It is particularly valuable for debugging connectivity issues, auditing unexpected network behaviour, and building a real service map of your cluster.
+
+**Q12: How do you handle on-call rotation and prevent burnout?**
+Several practices help: keep primary on-call rotations to one week maximum and ensure a secondary always backs up the primary. Enforce a toil budget — if an engineer spends more than 25 % of on-call time on manual interventions, escalate to fix the underlying issue. Hold blameless postmortems after every significant incident to prevent recurrence. Give on-call engineers compensatory time after difficult shifts. Use follow-the-sun rotation for global teams so nobody is paged between midnight and 06:00 local time unless it is truly critical. Track MTTA (mean time to acknowledge) and MTTR and review them weekly — a rising MTTR indicates the on-call experience is degrading.
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## A Day in the Life: Senior SRE at a Fintech Scale-up
+
+You join the 09:00 standup having already reviewed the overnight PagerDuty summary on your phone. Two alerts fired: a memory pressure warning on the notification-service at 02:14 (self-resolved after a pod restart), and a DNS resolution latency spike at 04:50 (also self-resolved, correlating with a CoreDNS pod restart on the same node). You note both on the team Slack thread — they are probably related; a node may have had a brief network blip. You add it to the toil log.
+
+By 09:30 you are at your desk with coffee. The SLO dashboard is your first stop: all services are green. Weekly error budget consumption for payment-service is 12 % — healthy. The dashboard shows deployment frequency (41 deploys this week across all services) and change failure rate (0 % — a good week).
+
+At 10:00 you start work on a project that has been on the backlog for two weeks: migrating the legacy `node_exporter` scrape configuration from static targets to Kubernetes service discovery. The old config has a list of 23 IP addresses manually maintained in a YAML file. When a node is replaced by the autoscaler, it falls off the list and you get a gap in host metrics. Three times in the last quarter this caused an incident to run blind — no CPU or memory data for an affected node.
+
+You write the Prometheus `kubernetes_sd_config` stanza, test it in the dev cluster, verify the targets are discovered correctly with `promtool`, and open a PR. You add a recording rule test alongside it — whenever you change alerting or recording rules you use `promtool test rules` to verify the logic against synthetic input data.
+
+At 12:30, lunch. At 13:30, a message arrives in #incidents: the checkout flow is showing elevated latency (p99 spiked from 180 ms to 620 ms 5 minutes ago). No error rate increase yet. You join the incident call.
+
+You pull up the distributed traces in Grafana Tempo. Filtering for slow traces (> 500 ms) from the last 10 minutes, you immediately see a pattern: every slow trace has the same span — a `SELECT` on the `product_inventory` table taking 450–550 ms. Normal baseline is 8 ms.
+
+You open the database metrics dashboard. The query's execution plan is in the slow query log: a full table scan on a 12-million-row table. You cross-reference with recent deployments — nothing touched the inventory service this week. But the inventory table is 2.1 GB, up from 1.4 GB last week (end-of-season stock upload). The query planner tipped over a statistics threshold and stopped using the index.
+
+You run `ANALYZE inventory` to refresh table statistics. Within 90 seconds, the query drops back to 9 ms, and p99 latency returns to 185 ms. Incident closed in 23 minutes from detection to resolution.
+
+After the call you write the incident report immediately while it is fresh: timeline, root cause (query planner statistics stale after large table growth), impact (elevated latency for 23 minutes, no errors), and action items: add a scheduled `ANALYZE` job to the database maintenance cron; add a Prometheus alert for query plan regression (query that suddenly becomes slower by 10× for 5+ consecutive minutes); update the runbook for checkout latency incidents to include the database slow query dashboard.
+
+At 16:00 the PR for the Prometheus service discovery migration is approved and merged. You deploy it to production and verify on the Prometheus targets page that all 23 nodes are now discovered dynamically. You mark the toil log item closed.
+
+End of day: two incidents documented, one resolved, zero pages during business hours (the ones that fired overnight were noise and self-resolved). One infrastructure improvement shipped. The on-call handover note goes to the evening engineer: "Watch the DNS latency pattern — if it happens again tonight, suspect node network issues and check CoreDNS pod placement with `kubectl get pods -n kube-system -o wide`."
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Synthetic Monitoring with the Blackbox Exporter
+
+Your internal metrics tell you what your services are doing from the inside. Synthetic monitoring tells you what your users are experiencing from the outside. The Prometheus Blackbox Exporter actively probes endpoints over HTTP, HTTPS, TCP, ICMP, and DNS, then exposes the results as Prometheus metrics.
+
+### Why Synthetic Monitoring Matters
+
+Internal metrics are blind to a class of problems:
+- Your service is up, but the TLS certificate expired — users see a browser security warning
+- A CDN edge node is misconfigured — users in Frankfurt get errors but your US-based monitors do not see anything
+- A DNS record was accidentally deleted — traffic stops but your service health checks pass because they use internal DNS
+- A third-party dependency (payment processor, auth provider) is degraded — your service returns 200 but users cannot complete transactions
+
+Synthetic monitoring catches all of these because it exercises the full path from client to response.
+
+### Deploying the Blackbox Exporter
+
+```yaml
+# blackbox-exporter-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: blackbox-exporter
+  template:
+    metadata:
+      labels:
+        app: blackbox-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9115"
+    spec:
+      containers:
+      - name: blackbox-exporter
+        image: prom/blackbox-exporter:v0.25.0
+        args:
+        - --config.file=/etc/blackbox/config.yml
+        ports:
+        - containerPort: 9115
+        volumeMounts:
+        - name: config
+          mountPath: /etc/blackbox
+      volumes:
+      - name: config
+        configMap:
+          name: blackbox-config
+```
+
+```yaml
+# blackbox-config.yaml
+modules:
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+      valid_status_codes: [200, 201, 204]
+      method: GET
+      follow_redirects: true
+      fail_if_ssl: false
+      fail_if_not_ssl: true         # require HTTPS
+      tls_config:
+        insecure_skip_verify: false
+
+  http_post_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      method: POST
+      headers:
+        Content-Type: application/json
+      body: '{"probe": "health-check"}'
+      valid_status_codes: [200, 201]
+
+  tcp_connect:
+    prober: tcp
+    timeout: 5s
+
+  icmp:
+    prober: icmp
+    timeout: 5s
+
+  dns_udp:
+    prober: dns
+    timeout: 5s
+    dns:
+      query_name: "api.company.com"
+      query_type: "A"
+```
+
+### Prometheus Configuration for Blackbox Probing
+
+```yaml
+# prometheus.yml — blackbox scrape configs
+scrape_configs:
+- job_name: blackbox-http
+  metrics_path: /probe
+  params:
+    module: [http_2xx]
+  static_configs:
+  - targets:
+    - https://app.company.com
+    - https://api.company.com/health
+    - https://checkout.company.com
+    - https://admin.company.com
+  relabel_configs:
+  - source_labels: [__address__]
+    target_label: __param_target
+  - source_labels: [__param_target]
+    target_label: instance
+  - target_label: __address__
+    replacement: blackbox-exporter:9115
+
+- job_name: blackbox-tcp
+  metrics_path: /probe
+  params:
+    module: [tcp_connect]
+  static_configs:
+  - targets:
+    - db.company.com:5432
+    - cache.company.com:6379
+  relabel_configs:
+  - source_labels: [__address__]
+    target_label: __param_target
+  - source_labels: [__param_target]
+    target_label: instance
+  - target_label: __address__
+    replacement: blackbox-exporter:9115
+```
+
+### Alerts for Synthetic Probes
+
+```yaml
+# prometheus/alerts/blackbox.yml
+groups:
+- name: blackbox
+  rules:
+  - alert: EndpointDown
+    expr: probe_success == 0
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Endpoint {{ $labels.instance }} is down"
+      description: "{{ $labels.instance }} has been unreachable for 2+ minutes."
+      runbook: "https://runbooks.company.com/blackbox/endpoint-down"
+
+  - alert: SSLCertificateExpiringSoon
+    expr: probe_ssl_earliest_cert_expiry - time() < 14 * 24 * 3600
+    for: 1h
+    labels:
+      severity: warning
+    annotations:
+      summary: "SSL certificate expiring in < 14 days: {{ $labels.instance }}"
+      description: "Certificate for {{ $labels.instance }} expires in {{ $value | humanizeDuration }}."
+
+  - alert: SSLCertificateExpired
+    expr: probe_ssl_earliest_cert_expiry - time() < 0
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "SSL certificate expired: {{ $labels.instance }}"
+
+  - alert: SlowHTTPProbe
+    expr: probe_duration_seconds > 3
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Slow HTTP probe: {{ $labels.instance }}"
+      description: "Probe duration is {{ $value }}s (threshold: 3s)."
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## APM Tools Comparison
+
+Application Performance Monitoring tools sit above raw metrics and tracing to provide developer-friendly insights: which function is slow, which database query is the bottleneck, what is the error rate per endpoint. Choosing the right tool depends on your budget, vendor preference, and how much you want to self-host.
+
+| Tool | Hosting | Strengths | Weaknesses | Pricing Model |
+|------|---------|-----------|-----------|---------------|
+| Datadog APM | SaaS | Best-in-class UX, AI insights, wide language support | Expensive at scale ($31+/host/month) | Per host + per GB |
+| New Relic | SaaS | Free tier generous, good dashboards | Agent can be heavy, complex pricing | Per GB ingested |
+| Dynatrace | SaaS | Automatic dependency mapping (Smartscape), root cause AI | Very expensive, complex licensing | Per host |
+| Grafana Cloud (OTel) | SaaS / self-host | OTel-native, free tier, open source stack | More setup required, no magic auto-discovery | Per series / GB |
+| Jaeger | Self-hosted | Free, CNCF project, good OTel integration | No metrics, basic UI | Infrastructure only |
+| Tempo | Self-hosted | Integrates with Grafana, cost-efficient (object storage) | Requires Grafana, no search without index | Infrastructure only |
+| Honeycomb | SaaS | Best high-cardinality query UX | Expensive, niche audience | Per event |
+| Elastic APM | Self-hosted / SaaS | Part of ELK stack, good if already using Elasticsearch | Complex to operate at scale | Per GB / hosted fee |
+
+### Selecting a Tool
+
+The decision usually comes down to two axes: budget and existing infrastructure.
+
+If you already run a Kubernetes cluster with Prometheus and Grafana, adding Tempo for traces and the OTel Collector is low cost and maintains your self-hosted independence. This is the right choice for cost-conscious teams willing to operate more infrastructure.
+
+If you are a fast-growing startup with a small platform team, Datadog or New Relic's managed experience may save more in engineering time than the premium costs. The auto-instrumentation and out-of-the-box dashboards get you to useful observability in days rather than weeks.
+
+If your compliance requirements prohibit sending data to third parties (HIPAA, data sovereignty), you must self-host. The Grafana LGTM stack (Loki, Grafana, Tempo, Mimir) covers all signals.
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Observability for Microservices
+
+In a microservices architecture, a single user request may traverse 10–20 services before returning a response. Understanding what happened requires connecting the telemetry across all of them.
+
+### Distributed Tracing Best Practices
+
+**Always propagate context.** Every service must extract incoming trace context (W3C `traceparent` header) and propagate it to downstream calls. If one service in the chain drops the context, the trace breaks.
+
+```go
+// Propagate context in outbound HTTP calls
+func (c *Client) Get(ctx context.Context, url string) (*http.Response, error) {
+    req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Inject trace context into the outbound request headers
+    otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+    
+    return c.httpClient.Do(req)
+}
+```
+
+**Name spans meaningfully.** A span named `HTTP GET` is useless. `payment-service: process-refund` tells you exactly what happened.
+
+**Add business context to spans.** Trace attributes should include enough business context to understand what was happening, without including sensitive data:
+
+```go
+span.SetAttributes(
+    attribute.String("payment.id", paymentID),
+    attribute.String("payment.currency", "GBP"),
+    attribute.Int64("payment.amount_pence", int64(amountPence)),
+    attribute.String("payment.method", "card"),
+    // Never include: card number, CVV, full bank account details
+)
+```
+
+**Record errors on spans.**
+
+```go
+if err != nil {
+    span.RecordError(err)
+    span.SetStatus(codes.Error, err.Error())
+    return fmt.Errorf("processing payment: %w", err)
+}
+```
+
+### Service Mesh Observability
+
+If you are running a service mesh (Istio, Linkerd), it automatically generates golden signal metrics for every service-to-service call without application instrumentation. This is your baseline; application-level tracing adds depth.
+
+```yaml
+# Istio — enable distributed tracing with sampling
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+spec:
+  meshConfig:
+    enableTracing: true
+    defaultConfig:
+      tracing:
+        sampling: 1.0         # percentage (1 = 1%)
+        zipkin:
+          address: jaeger-collector.monitoring:9411
+```
+
+With Istio you get, for free: request rate, error rate, and request duration (the RED metrics) for every service, plus a service topology map, without touching application code. This is invaluable for brownfield systems where you cannot easily add instrumentation.
+
+### Logs, Metrics, and Traces in Context
+
+The real power of observability comes from correlating all three signals. An incident investigation might go:
+
+1. **Alert fires** on a metric (high error rate on checkout-service)
+2. **Dashboard** shows the error rate started at 14:32:05
+3. **Logs** — filter to checkout-service, 14:32–14:35, ERROR level — show `payment-service: connection timeout`
+4. **Traces** — filter for errored traces from 14:32 — the slow span is `payment-service: charge-card`
+5. **Payment service metrics** — connection pool exhaustion at 14:31:58 → a deployment went out at 14:28 that reduced the pool size
+
+You followed the thread from metric → log → trace → metric, each signal adding precision to the diagnosis. This is why you store all three in a system where they share timestamps and trace IDs, and why Grafana's unified query interface across Loki, Tempo, and Prometheus (or Mimir) is powerful.
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Cost of Observability
+
+Observability is not free. At scale, metrics, logs, and traces are among the top three infrastructure costs. Understanding the cost drivers and optimising them without sacrificing visibility is a real engineering challenge.
+
+### Metrics Cost
+
+The cost of Prometheus-based metrics scales with the number of active series. Common cost drivers:
+
+- **High-cardinality labels** (see the cardinality section above)
+- **Unused metrics** — many exporters (node_exporter, kube-state-metrics) emit hundreds of metrics. If you never query them, they waste storage.
+- **Too-short scrape intervals** — 10-second scrapes cost 6× more than 60-second scrapes for the same metrics. Use 30 or 60 seconds for infrastructure metrics; reserve 10 seconds for SLO-critical metrics.
+
+```yaml
+# Drop unused metrics at collection time (Prometheus relabeling)
+metric_relabel_configs:
+- source_labels: [__name__]
+  regex: 'go_gc_.*|go_memstats_.*|process_.*'
+  action: drop
+
+# Or at the Collector (OTel)
+processors:
+  filter:
+    metrics:
+      exclude:
+        match_type: regexp
+        metric_names:
+          - "^go_.*"
+          - "^process_.*"
+```
+
+### Logs Cost
+
+Logs typically cost more than metrics at scale. A busy service generating 10 KB of structured logs per second produces 864 GB per day. At $0.50/GB (typical SaaS logging), that is $432/day for one service.
+
+Reduce cost without losing signal:
+- Set structured log levels correctly — production services should log INFO by default, DEBUG only when troubleshooting
+- Drop noisy INFO-level lines that carry no diagnostic value (health check requests, routine scheduler ticks)
+- Use sampling for high-volume low-value logs (HTTP access logs for a CDN layer)
+
+```yaml
+# Loki pipeline to drop health check logs
+pipeline_stages:
+- match:
+    selector: '{app="api-gateway"}'
+    stages:
+    - json:
+        expressions:
+          path: path
+          status: status
+    - drop:
+        expression: '([[ .path ]] == "/health" && [[ .status ]] == "200")'
+```
+
+### Traces Cost
+
+Traces are the most expensive signal because each trace contains many spans with full context. Mitigate with tail-based sampling (keep only interesting traces) and compact storage (Tempo uses object storage; Jaeger can use Cassandra or Elasticsearch).
+
+A practical cost target: observability should cost no more than 5–10 % of your total compute bill. If it exceeds that, you are likely retaining too much raw data or have a cardinality explosion somewhere.
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Grafana Dashboard Production Patterns
+
+A well-built Grafana dashboard accelerates incident response. A poorly built one adds confusion. These patterns separate production-grade dashboards from dashboards that engineers stop using after a week.
+
+### Dashboard Structure
+
+Every dashboard should follow a consistent top-to-bottom narrative:
+1. **Summary row**: SLO status, overall error budget, single-stat panels with RED (Rate, Errors, Duration)
+2. **Service health row**: per-endpoint error rate, latency percentiles (p50, p95, p99), throughput
+3. **Dependency health row**: database latency and error rate, cache hit rate, message queue lag
+4. **Infrastructure row**: pod CPU and memory, node saturation, GC pause duration
+5. **Recent deployments row**: deployment events overlaid on metrics (use Grafana annotations)
+
+### Deployment Annotations
+
+Overlay deployments as vertical lines on all time-series panels so you can immediately see whether a metric change correlates with a deploy:
+
+```python
+# CI job: post deployment annotation to Grafana
+import httpx, os, time
+
+GRAFANA_URL = os.environ["GRAFANA_URL"]
+GRAFANA_API_KEY = os.environ["GRAFANA_SERVICE_ACCOUNT_TOKEN"]
+
+httpx.post(
+    f"{GRAFANA_URL}/api/annotations",
+    headers={"Authorization": f"Bearer {GRAFANA_API_KEY}"},
+    json={
+        "time": int(time.time() * 1000),
+        "tags": ["deploy", os.environ["SERVICE_NAME"]],
+        "text": f"Deploy {os.environ['SERVICE_NAME']} {os.environ['IMAGE_TAG']}\nBy: {os.environ['GITHUB_ACTOR']}"
+    }
+)
+```
+
+### Dashboard as Code
+
+Managing Grafana dashboards through the UI leads to drift and unreviewed changes. Store dashboards as JSON in Git and deploy via CI using Grafana's API or the Grafana Operator:
+
+```bash
+# Export a dashboard as JSON
+curl -s -H "Authorization: Bearer $GRAFANA_TOKEN" \
+  "$GRAFANA_URL/api/dashboards/uid/payment-service" | \
+  jq '.dashboard' > dashboards/payment-service.json
+
+# Import (create or update) a dashboard
+curl -s -X POST \
+  -H "Authorization: Bearer $GRAFANA_TOKEN" \
+  -H "Content-Type: application/json" \
+  "$GRAFANA_URL/api/dashboards/db" \
+  -d "{\"dashboard\": $(cat dashboards/payment-service.json), \"overwrite\": true}"
+```
+
+With Grafana Operator (for Kubernetes), dashboards are managed as CRDs:
+
+```yaml
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: payment-service
+  namespace: monitoring
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  json: >
+    {
+      "title": "Payment Service",
+      ...
+    }
+```
+
+### Useful Panel Types
+
+| Situation | Panel Type |
+|-----------|-----------|
+| Current error rate | Stat (with colour thresholds) |
+| Error rate trend | Time series |
+| p50/p95/p99 latency | Time series with fill between series |
+| Top slow endpoints | Table (sorted by p99) |
+| Deployment events | Annotations on time-series panels |
+| SLO burn rate | Gauge (with green/yellow/red zones) |
+| Pod restarts | Bar chart or Stat |
+| Dependency status | State timeline |
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Prometheus Operator and kube-prometheus-stack
+
+The Prometheus Operator is the standard way to manage Prometheus on Kubernetes. It introduces CRDs (`Prometheus`, `Alertmanager`, `ServiceMonitor`, `PodMonitor`, `PrometheusRule`) that let you manage monitoring configuration as Kubernetes resources.
+
+`kube-prometheus-stack` is the Helm chart that bundles the Operator, Prometheus, Alertmanager, Grafana, and a comprehensive set of alerting rules and dashboards for Kubernetes cluster monitoring — all in one chart.
+
+### Installing kube-prometheus-stack
+
+```bash
+helm repo add prometheus-community \
+  https://prometheus-community.github.io/helm-charts
+helm repo update
+
+helm install kube-prometheus-stack \
+  prometheus-community/kube-prometheus-stack \
+  --namespace monitoring \
+  --create-namespace \
+  --values monitoring/prometheus-values.yaml
+```
+
+```yaml
+# monitoring/prometheus-values.yaml
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    retentionSize: "40GB"
+    replicas: 2
+    
+    # Only scrape ServiceMonitors in the monitoring namespace and
+    # any namespace with the label prometheus: kube-prometheus-stack
+    serviceMonitorNamespaceSelector:
+      matchLabels:
+        prometheus: kube-prometheus-stack
+    serviceMonitorSelector: {}
+    
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 50Gi
+    
+    # External labels added to all metrics (important for Thanos)
+    externalLabels:
+      cluster: prod-eu-west-1
+      region: eu-west-1
+
+alertmanager:
+  alertmanagerSpec:
+    replicas: 3
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: gp3
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 10Gi
+  config:
+    global:
+      resolve_timeout: 5m
+    route:
+      receiver: default
+    receivers:
+    - name: default
+
+grafana:
+  adminPassword: "change-me-via-secret"
+  persistence:
+    enabled: true
+    storageClassName: gp3
+    size: 10Gi
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL
+```
+
+### ServiceMonitor Example
+
+```yaml
+# Service monitor for your own application
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: payment-service
+  namespace: production
+  labels:
+    # Must match serviceMonitorSelector in your Prometheus CRD
+    app: payment-service
+spec:
+  selector:
+    matchLabels:
+      app: payment-service
+  namespaceSelector:
+    matchNames:
+    - production
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    scheme: http
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: namespace
+```
+
+### PrometheusRule Example
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: payment-service-alerts
+  namespace: production
+  labels:
+    app: payment-service
+    prometheus: kube-prometheus-stack
+spec:
+  groups:
+  - name: payment-service
+    rules:
+    - alert: PaymentServiceHighErrorRate
+      expr: |
+        sum(rate(http_requests_total{
+          job="payment-service",
+          status=~"5.."
+        }[5m])) /
+        sum(rate(http_requests_total{job="payment-service"}[5m])) > 0.01
+      for: 2m
+      labels:
+        severity: critical
+        service: payment-service
+        team: payments
+      annotations:
+        summary: "High error rate on payment-service"
+        description: "Error rate is {{ $value | humanizePercentage }} over last 5 minutes."
+        runbook: "https://runbooks.company.com/payment-service/high-error-rate"
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Real-World War Story: The Observability Blind Spot
+
+A mid-size B2B SaaS company — 500 business customers, $4M ARR — had Prometheus, Grafana, and PagerDuty set up. They felt confident in their monitoring. Then they had an incident that revealed a critical gap.
+
+One afternoon a customer opened a support ticket: "Our team has been getting intermittent errors on the document export feature for the past three days." Three days. The engineering team had zero PagerDuty alerts, zero Slack notifications, and zero awareness of the problem.
+
+The investigation revealed the issue: document export was calling a third-party PDF rendering service (a SaaS API). This service had been experiencing elevated error rates for three days, but only for documents larger than 10 MB. The response was a 200 OK with a JSON body containing `{"error": "rendering_failed", "code": "TIMEOUT"}`. The error was buried in the response body, not the HTTP status code.
+
+The engineering team's monitoring checked HTTP status codes. Everything was green because all responses were 200. The feature was silently failing for large documents for 72 hours before a user noticed and bothered to file a ticket.
+
+**Root causes:**
+1. No application-level business metric tracking document export success/failure
+2. No synthetic monitoring that actually exported a large document and verified the output
+3. No alerting on the third-party API's own status page (they had a status webhook available)
+4. The third-party service returned 200 for errors — a design flaw, but you need to code defensively
+
+**Fixes:**
+- Added a `document_export_total{status="success|failure", customer_tier="small|large"}` counter to the application
+- Added an SLO (99.5 % success for document exports) with error budget alerting
+- Added a synthetic monitor that exports a 12 MB test document every 5 minutes and checks the output hash
+- Added a Prometheus target that scrapes the third-party API's status page via Blackbox Exporter
+
+The lesson: HTTP status codes tell you about protocol-level success, not business-level success. Instrument your actual business transactions, not just your web server responses.
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Tooling Reference Card
+
+Quick reference for commands you will use regularly in day-to-day observability work.
+
+### Prometheus
+
+```bash
+# Check Prometheus targets (which are scraping successfully)
+curl -s http://prometheus:9090/api/v1/targets | \
+  jq '.data.activeTargets[] | {job: .labels.job, health: .health, error: .lastError}'
+
+# Reload configuration without restart
+curl -X POST http://prometheus:9090/-/reload
+
+# Query instant vector
+curl -sG http://prometheus:9090/api/v1/query \
+  --data-urlencode 'query=up{job="payment-service"}' | jq .
+
+# Query over a time range
+curl -sG http://prometheus:9090/api/v1/query_range \
+  --data-urlencode 'query=rate(http_requests_total[5m])' \
+  --data-urlencode "start=$(date -u -d '1 hour ago' +%s)" \
+  --data-urlencode "end=$(date -u +%s)" \
+  --data-urlencode 'step=60' | jq .
+
+# Validate rules file
+promtool check rules rules/my-rules.yml
+
+# Test rules against synthetic data
+promtool test rules tests/my-rules-test.yml
+
+# Check config file syntax
+promtool check config prometheus.yml
+```
+
+### Alertmanager
+
+```bash
+# Check Alertmanager status
+amtool --alertmanager.url=http://alertmanager:9093 alert query
+
+# Test alert routing
+amtool --alertmanager.url=http://alertmanager:9093 \
+  config routes test \
+  --verify.receivers=pagerduty-production \
+  severity=critical service=payment-service
+
+# Create a silence
+amtool --alertmanager.url=http://alertmanager:9093 \
+  silence add \
+  --duration=2h \
+  --comment="Planned maintenance" \
+  alertname="PaymentServiceHighErrorRate"
+
+# List silences
+amtool --alertmanager.url=http://alertmanager:9093 silence query
+
+# Reload config
+amtool --alertmanager.url=http://alertmanager:9093 config reload
+```
+
+### Grafana
+
+```bash
+# Export dashboard JSON
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://grafana:3000/api/dashboards/uid/DASHBOARD_UID" | \
+  jq '.dashboard' > dashboard.json
+
+# Import dashboard
+curl -s -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  "http://grafana:3000/api/dashboards/db" \
+  -d "{\"dashboard\": $(cat dashboard.json), \"overwrite\": true, \"folderId\": 0}"
+
+# List datasources
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://grafana:3000/api/datasources" | jq '.[].name'
+```
+
+### OpenTelemetry Collector
+
+```bash
+# Validate OTel Collector config
+docker run --rm \
+  -v $(pwd)/otel-config.yaml:/etc/otel/config.yaml \
+  otel/opentelemetry-collector:latest \
+  --config=/etc/otel/config.yaml validate
+
+# Check collector metrics (zpages)
+curl http://localhost:55679/debug/tracez
+
+# Health check
+curl http://localhost:13133/
+```
+
+### Blackbox Exporter
+
+```bash
+# Test a probe manually
+curl -s "http://blackbox-exporter:9115/probe?target=https://app.company.com&module=http_2xx" | \
+  grep -E "probe_success|probe_duration|probe_ssl_earliest_cert_expiry"
+
+# Check probe result in human-readable form
+curl -sv "http://blackbox-exporter:9115/probe?target=https://app.company.com&module=http_2xx&debug=true"
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Kubernetes-Specific Monitoring Patterns
+
+Kubernetes introduces a new set of monitoring challenges. Pods are ephemeral: they restart, reschedule, and scale up and down. The metrics that matter in Kubernetes are often different from traditional server monitoring.
+
+### Key Kubernetes Metrics
+
+```promql
+-- Pod restart rate (CrashLoopBackOff detection)
+rate(kube_pod_container_status_restarts_total[5m]) > 0
+
+-- Pods not running (stuck in Pending, ImagePullBackOff, etc.)
+kube_pod_status_phase{phase!="Running",phase!="Succeeded"} == 1
+
+-- Node CPU saturation
+100 - (avg by (node) (
+  rate(node_cpu_seconds_total{mode="idle"}[5m])
+) * 100) > 80
+
+-- Memory pressure (node)
+(node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) < 0.10
+
+-- PVC almost full
+(
+  kubelet_volume_stats_used_bytes /
+  kubelet_volume_stats_capacity_bytes
+) > 0.85
+
+-- HPA at max replicas (cannot scale further)
+kube_horizontalpodautoscaler_status_current_replicas ==
+  kube_horizontalpodautoscaler_spec_max_replicas
+
+-- Deployment rollout stuck
+kube_deployment_status_replicas_updated !=
+  kube_deployment_spec_replicas
+```
+
+### Resource Requests vs. Limits
+
+Always monitor the gap between resource requests and actual usage. Over-requested pods waste cluster capacity; under-requested pods get OOMKilled or throttled.
+
+```promql
+-- CPU throttling percentage (high value = requests are too low)
+sum by (pod, container, namespace) (
+  rate(container_cpu_cfs_throttled_seconds_total[5m])
+) /
+sum by (pod, container, namespace) (
+  rate(container_cpu_cfs_periods_total[5m])
+) > 0.25
+
+-- Memory utilisation vs request
+sum by (pod, namespace) (
+  container_memory_working_set_bytes{container!=""}
+) /
+sum by (pod, namespace) (
+  kube_pod_container_resource_requests{resource="memory",container!=""}
+) > 0.9
+```
+
+Use [Vertical Pod Autoscaler (VPA)](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler) in recommendation mode to get right-sizing suggestions:
+
+```bash
+# Check VPA recommendations
+kubectl get vpa -n production -o json | \
+  jq '.items[] | {
+    name: .metadata.name,
+    cpu_request: .status.recommendation.containerRecommendations[0].target.cpu,
+    memory_request: .status.recommendation.containerRecommendations[0].target.memory
+  }'
+```
+
+### Namespace-Level Quotas Monitoring
+
+```promql
+-- Namespace quota CPU usage ratio
+sum by (namespace) (
+  kube_resourcequota{resource="requests.cpu", type="used"}
+) /
+sum by (namespace) (
+  kube_resourcequota{resource="requests.cpu", type="hard"}
+) > 0.8
+```
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## On-Call Best Practices
+
+The on-call rotation is where all your monitoring investment gets tested. A well-run on-call programme turns monitoring into reliability; a poorly run one turns it into burnout and ignored alerts.
+
+### Before Your Shift
+
+- Read the previous on-call handover note — know what was left open
+- Check the deployment calendar — if a major release is planned, coordinate with the team
+- Ensure your alerting path works: acknowledge a test PagerDuty alert, confirm Slack notifications arrive
+- Review any open incidents or degraded services
+- Have the runbook index bookmarked and accessible on your phone
+
+### During Your Shift
+
+When an alert fires, follow this sequence:
+1. **Acknowledge** within your SLA (typically 5 minutes) to stop escalation
+2. **Assess severity** — is this a P1 (revenue impact, data loss risk) or P3 (degraded non-critical path)?
+3. **Communicate** — post to #incidents immediately: "Investigating alert: payment-service error rate spike. ETA first update: 5 minutes."
+4. **Diagnose** — use the runbook; do not skip steps even if you think you know the answer
+5. **Mitigate** — prefer fast mitigation (rollback, feature flag off) over slow root cause fix during the incident
+6. **Communicate again** — update #incidents every 15 minutes during P1/P2 incidents
+7. **Resolve** — verify that metrics returned to baseline before closing the incident
+8. **Document** — write the incident summary immediately; memory fades fast
+
+### Escalation Paths
+
+Define escalation paths before incidents, not during them. Document: who is the secondary on-call? Who is the service owner? Who is the manager on duty? Who is the executive escalation path for P1 incidents?
+
+```markdown
+# On-Call Escalation Matrix
+
+| Severity | Response SLA | Escalate After | Escalate To |
+|----------|-------------|---------------|-------------|
+| P1 | 5 min ack | 15 min unresolved | Service lead + manager |
+| P2 | 15 min ack | 30 min unresolved | Service lead |
+| P3 | 1 hour ack | 4 hours unresolved | Service lead (async) |
+| P4 | Next business day | — | Ticket assigned to team |
+```
+
+### Tracking Toil
+
+Toil is operational work that is manual, repetitive, automatable, and tactical — it does not produce lasting value. Track every manual action you take during on-call:
+
+- How many times did you manually restart a pod?
+- How many false-positive alerts did you handle?
+- How many Slack messages did you send to notify stakeholders of routine events?
+
+If toil exceeds 25 % of your on-call time, escalate to engineering leadership. Use the data to justify automation investment. "I manually restarted the payment-service pod 14 times last month" is a compelling argument for fixing the underlying memory leak.
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Further Reading
+
+### Books
+
+- **Site Reliability Engineering** (O'Reilly, Google SRE Book) — the foundational text. Chapters on monitoring, SLOs, and alerting are essential reading. Available free online at sre.google/sre-book.
+- **The Site Reliability Workbook** (O'Reilly, Google) — companion to the SRE Book with more practical examples. The SLO chapter is directly applicable to Prometheus alerting.
+- **Observability Engineering** by Charity Majors, Liz Fong-Jones, and George Miranda — makes the case for high-cardinality, event-based observability and explains why it complements (rather than replaces) metrics.
+- **Prometheus: Up & Running** by Brian Brazil — the most comprehensive book on Prometheus, covering PromQL, instrumentation, storage, and federation.
+
+### Online Resources
+
+- [prometheus.io/docs](https://prometheus.io/docs/) — official Prometheus documentation, including the PromQL reference.
+- [grafana.com/docs](https://grafana.com/docs/) — Grafana documentation covering Grafana, Loki, Tempo, and Mimir.
+- [opentelemetry.io/docs](https://opentelemetry.io/docs/) — OTel specification, SDK documentation, and Collector configuration.
+- [sre.google/workbook/alerting-on-slos](https://sre.google/workbook/alerting-on-slos/) — the definitive guide to multi-window, multi-burn-rate alerting.
+- [last9.io/blog/slo-error-budget](https://last9.io/blog/) — practical articles on SLO implementation.
+- [Thanos documentation](https://thanos.io/tip/thanos/getting-started.md/) — getting started guide and architecture reference.
+- [Cilium Hubble documentation](https://docs.cilium.io/en/stable/observability/) — eBPF network observability.
+
+### Tools to Explore
+
+- **Perses** — new open-source dashboard standard from CNCF, aimed at Grafana compatibility with better GitOps support.
+- **VictoriaMetrics** — high-performance, cost-efficient alternative to Prometheus for large-scale metrics. Drop-in compatible with Prometheus remote write.
+- **Coroot** — open-source observability tool with automatic service map, eBPF-based instrumentation, and SLO management.
+- **Sloth** — SLO-based Prometheus rules and alert generator. Define your SLOs in YAML and generate the multi-window burn rate rules automatically.
+- **pyrra** — similar to Sloth; generates SLO dashboards and alerts from CRD definitions.
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
 *© 2026 UncleJS — Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution. See [LICENSE.md](./LICENSE.md).*

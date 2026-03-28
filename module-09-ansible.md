@@ -33,7 +33,7 @@
 
 Ansible is the most widely-used configuration management tool in DevOps. Where Terraform provisions infrastructure (creates servers, networks, databases), Ansible **configures** that infrastructure — installs software, manages services, deploys applications, and enforces system state.
 
-Ansible is agentless — it connects to hosts over SSH and runs tasks. There's nothing to install on managed hosts beyond Python.
+Ansible is agentless on the managed hosts — it connects to hosts over SSH and runs tasks. There's nothing to install on managed hosts beyond Python. Control-side tooling such as AWX Execution Environments does not change that host-side agentless model.
 
 ```mermaid
 flowchart LR
@@ -117,7 +117,7 @@ Managed Hosts (servers you want to configure)
 | Feature | Ansible | Chef/Puppet | Terraform |
 |---|---|---|---|
 | Language | YAML | Ruby DSL | HCL |
-| Agent required | No (SSH) | Yes | No |
+| Agent required | No on managed hosts (SSH/WinRM) | Yes | No |
 | Primary use | Config management, app deploy | Config management | Infrastructure provisioning |
 | Learning curve | Low | High | Medium |
 | Idempotent | Yes | Yes | Yes |
@@ -1011,7 +1011,7 @@ awx job_templates launch 42 \
 
 ### Execution Environments
 
-AWX 19+ uses **Execution Environments** — container images that bundle Ansible, collections, and Python dependencies. This eliminates "works on my machine" problems:
+AWX 19+ uses **Execution Environments** — container images that bundle Ansible, collections, and Python dependencies. These run on the control side, not on the managed hosts, so Ansible remains agentless while eliminating "works on my machine" problems:
 
 ```bash
 # Build a custom EE with ansible-builder

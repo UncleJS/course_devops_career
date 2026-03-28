@@ -68,7 +68,7 @@ The OSI model is primarily useful as a troubleshooting vocabulary, not as a lite
 
 Troubleshooting networks systematically means working from the bottom up. Start by confirming the physical and IP layers are functioning: can you `ping` the target? If not, is the route correct? Are firewall rules blocking ICMP? Once layer 3 is confirmed, move to layer 4: can you `nc -zv` the target port? A TCP connection refused means the host is reachable but nothing is listening. A timeout means firewall or routing is blocking the packet before it reaches the host. Only once you have confirmed transport connectivity should you start examining application behavior.
 
-Understanding which layer a protocol operates at predicts what can go wrong. HTTP/S, gRPC, and WebSocket are layer 7 — they depend on everything below them working correctly. TLS operates at the boundary of layers 6 and 7 — a certificate error is a TLS handshake failure that happens before any HTTP is exchanged. DNS is a layer 7 protocol that exists to support other layer 7 protocols. This layering explains why a valid HTTP request can fail due to a DNS misconfiguration, a routing loop, a dropped TCP SYN, a TLS version mismatch, or a misconfigured application — and why a methodical bottom-up approach is the only reliable diagnostic strategy.
+Understanding which layer a protocol operates at predicts what can go wrong. HTTP/S, gRPC, and WebSocket are layer 7 — they depend on everything below them working correctly. TLS is usually classified at layer 6 (Presentation) — a certificate error is a TLS handshake failure that happens before any HTTP is exchanged. DNS is a layer 7 protocol that exists to support other layer 7 protocols. This layering explains why a valid HTTP request can fail due to a DNS misconfiguration, a routing loop, a dropped TCP SYN, a TLS version mismatch, or a misconfigured application — and why a methodical bottom-up approach is the only reliable diagnostic strategy.
 
 ```mermaid
 flowchart TD
@@ -275,7 +275,7 @@ Browser asks: "What is the IP for app.example.com?"
 1. Check local cache (fastest)
 2. Check /etc/hosts file
 3. Ask configured DNS resolver (e.g., 8.8.8.8)
-4. Resolver queries Root DNS servers (13 root clusters)
+4. Resolver queries the root DNS system (13 root server identities, delivered globally via many anycast instances)
 5. Root servers point to .com TLD servers
 6. TLD servers point to example.com nameservers
 7. example.com nameservers return the IP

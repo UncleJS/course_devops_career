@@ -115,9 +115,9 @@ The **API server** (`kube-apiserver`) is the only component that other component
 
 **etcd** is not just a component — it IS the cluster. Every Kubernetes object (pods, deployments, services, secrets, configmaps) is stored as a key-value entry in etcd. If etcd becomes corrupt or unrecoverable, the cluster has no source of truth and cannot be restored without a backup. That is why etcd backup is non-negotiable in production: take consistent snapshots to an external store, and test restoration before you need it in an outage.
 
-### Control Plane (Master)
+### Control Plane
 
-The control plane manages the cluster state. It runs on master node(s).
+The control plane manages the cluster state. It runs on control plane node(s).
 
 | Component | Role |
 |---|---|

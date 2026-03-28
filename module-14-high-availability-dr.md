@@ -467,7 +467,7 @@ sync_binlog = 1
 
 # Create replication user on primary
 CREATE USER 'replicator'@'192.168.1.%' IDENTIFIED BY 'ReplPassword123!';
-GRANT REPLICATION SLAVE ON *.* TO 'replicator'@'192.168.1.%';
+GRANT REPLICATION SOURCE ON *.* TO 'replicator'@'192.168.1.%';
 FLUSH PRIVILEGES;
 
 # Get current binary log position (lock tables briefly)
@@ -498,7 +498,7 @@ CHANGE REPLICATION SOURCE TO
 
 START REPLICA;
 
-# Check status (MySQL 8.0.22+; use SHOW SLAVE STATUS\G on MySQL < 8.0.22)
+# Check status (modern command; older versions used SHOW SLAVE STATUS\G)
 SHOW REPLICA STATUS\G
 # Look for:
 # Replica_IO_Running: Yes

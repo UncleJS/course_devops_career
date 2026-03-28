@@ -33,7 +33,7 @@
 
 Infrastructure as Code (IaC) means defining your infrastructure — servers, networks, databases, DNS records — in version-controlled configuration files. Instead of clicking through a web console or running manual commands, you write declarative code and let the tool figure out how to make reality match your desired state.
 
-**Terraform** was the dominant open-source IaC tool for years. In 2023, HashiCorp changed Terraform's license from MPL-2.0 to BSL (Business Source License), restricting commercial use. The open-source community forked it as **OpenTofu**, now maintained by the Linux Foundation and hosted under the CNCF.
+**Terraform** was the dominant open-source IaC tool for years. In 2023, HashiCorp changed Terraform's license from MPL-2.0 to BSL (Business Source License). BSL is source-available but not OSI-approved, and it restricts some forms of commercial redistribution and competing hosted-service use. The open-source community forked it as **OpenTofu**, now maintained by the Linux Foundation and hosted under the CNCF.
 
 This module covers both tools — they share 99% of their syntax, and you can use either in practice.
 
@@ -126,10 +126,10 @@ That means you should focus first on mastering the workflow: write clear configu
 
 | Feature | Terraform | OpenTofu |
 |---|---|---|
-| **License** | BSL 1.1 (since v1.6 — restricts commercial use) | MPL-2.0 (fully open source) |
+| **License** | BSL 1.1 (since v1.6 — source-available, not OSI open source) | MPL-2.0 (fully open source) |
 | **Maintainer** | HashiCorp / IBM | Linux Foundation / OpenTofu TSC |
 | **CLI binary** | `terraform` | `tofu` |
-| **Compatible with** | — | Terraform ≤ 1.5.x (100% compatible) |
+| **Compatible with** | — | Terraform ≤ 1.5.x (high syntax and state compatibility) |
 | **Registry** | registry.terraform.io | registry.opentofu.org |
 | **New features** | Continues development | Continues independent development |
 | **Community** | Large (existing) | Growing rapidly |
@@ -137,11 +137,11 @@ That means you should focus first on mastering the workflow: write clear configu
 ### When to Choose Each
 
 - **Choose Terraform**: Your team already uses it, you use HashiCorp's Terraform Cloud, or you need HCP Vault integrations
-- **Choose OpenTofu**: You want fully open-source tooling, avoid BSL restrictions, or are starting fresh
+- **Choose OpenTofu**: You want fully open-source tooling, prefer open governance, or are starting fresh
 
 ### Syntax Differences
 
-For Terraform ≤ 1.5 compatibility, the syntax is **identical**. Newer OpenTofu-specific features (like `provider_meta`, early `for_each` enhancements) may differ. In practice: **almost everything in this module works with both**.
+For Terraform ≤ 1.5.x configurations, the day-to-day syntax is effectively identical. Newer OpenTofu-specific features and future Terraform-only changes may differ. In practice: **most of this module works with both**, but teams should still test providers, state workflows, and CI pipelines before swapping binaries in an existing environment.
 
 ```bash
 # Terraform

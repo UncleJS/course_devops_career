@@ -156,6 +156,9 @@ Security testing performed against a running application to find vulnerabilities
 **Data Source (Grafana)**
 A configured connection in Grafana to a metrics backend — e.g., Prometheus, Zabbix, Elasticsearch, InfluxDB.
 
+**Datadog**
+A commercial SaaS observability platform providing metrics, logs, traces, and APM in one product — a common alternative to self-hosted Prometheus/Grafana stacks.
+
 **Declarative Configuration**
 A style of defining system state by specifying *what* you want (not *how* to achieve it) — used in Kubernetes YAML, Terraform HCL, and Ansible playbooks.
 
@@ -189,6 +192,9 @@ A software principle encouraging code reuse and avoiding duplication — applied
 
 ## E
 
+**eBPF (extended Berkeley Packet Filter)**
+A Linux kernel technology that runs sandboxed programs inside the kernel without changing kernel source code — the foundation of modern networking (Cilium), observability, and runtime security (Falco) tooling.
+
 **ELK Stack**
 A popular log management stack consisting of **E**lasticsearch (storage/search), **L**ogstash (ingestion/processing), and **K**ibana (visualization).
 
@@ -209,6 +215,9 @@ A small program that collects metrics from a target system and exposes them in P
 
 **Failover**
 The automatic switching to a standby system, server, or network when the primary one fails.
+
+**Falco**
+A CNCF runtime security tool that monitors Linux system calls (via eBPF or a kernel module) to detect suspicious behaviour in containers and hosts in real time.
 
 **Firewall**
 A network security system that monitors and controls incoming and outgoing network traffic based on defined rules.
@@ -293,6 +302,9 @@ A file or dynamic source that lists the hosts and groups Ansible will manage. Ca
 **IP Address**
 A numerical label assigned to a device on a network. IPv4 uses 32-bit addresses (e.g., `192.168.1.1`), IPv6 uses 128-bit addresses.
 
+**Istio**
+A widely used service mesh for Kubernetes that provides mTLS, traffic management, and observability via Envoy sidecar proxies (or ambient mode without sidecars).
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -338,8 +350,14 @@ The delay between a request being sent and a response being received — a key p
 **LDAP (Lightweight Directory Access Protocol)**
 A protocol for accessing and maintaining distributed directory information — often used for centralized authentication.
 
+**Linkerd**
+A lightweight, CNCF-graduated service mesh for Kubernetes focused on simplicity and low resource overhead — provides automatic mTLS and golden metrics with minimal configuration.
+
 **Load Balancer**
 A device or software that distributes incoming network traffic across multiple servers to improve availability and performance.
+
+**LogQL**
+The query language used by Grafana Loki — combines label-based stream selectors (like PromQL) with log line filters and metric extraction (e.g., `{app="api"} |= "error"`).
 
 **Logstash**
 A server-side data processing pipeline that ingests, transforms, and sends log data to Elasticsearch.

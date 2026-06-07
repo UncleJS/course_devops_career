@@ -10,25 +10,43 @@
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Learning Objectives](#learning-objectives)
-3. [The DevSecOps Mindset](#the-devsecops-mindset)
-4. [Identity & Access Management (IAM)](#identity--access-management-iam)
-5. [RBAC in Kubernetes](#rbac-in-kubernetes)
-6. [Secrets Management with HashiCorp Vault](#secrets-management-with-hashicorp-vault)
-7. [SAST — Static Application Security Testing](#sast--static-application-security-testing)
-8. [DAST — Dynamic Application Security Testing](#dast--dynamic-application-security-testing)
-9. [Software Composition Analysis (SCA)](#software-composition-analysis-sca)
-10. [Container Security](#container-security)
-11. [Policy as Code — OPA & Gatekeeper](#policy-as-code--opa--gatekeeper)
-12. [Network Security](#network-security)
-13. [Cloud Security Fundamentals](#cloud-security-fundamentals)
-14. [Security in CI/CD Pipelines](#security-in-cicd-pipelines)
-15. [Compliance & Audit Frameworks](#compliance--audit-frameworks)
-16. [Runtime Security with Falco](#runtime-security-with-falco)
-17. [Tools & Commands Reference](#tools--commands-reference)
-18. [Hands-On Labs](#hands-on-labs)
-19. [Further Reading](#further-reading)
+- [Overview](#overview)
+- [Learning Objectives](#learning-objectives)
+- [The DevSecOps Mindset](#the-devsecops-mindset)
+- [Identity & Access Management (IAM)](#identity--access-management-iam)
+- [RBAC in Kubernetes](#rbac-in-kubernetes)
+- [Secrets Management with HashiCorp Vault](#secrets-management-with-hashicorp-vault)
+- [SAST — Static Application Security Testing](#sast--static-application-security-testing)
+- [DAST — Dynamic Application Security Testing](#dast--dynamic-application-security-testing)
+- [Software Composition Analysis (SCA)](#software-composition-analysis-sca)
+- [Container Security](#container-security)
+- [Policy as Code — OPA & Gatekeeper](#policy-as-code--opa--gatekeeper)
+- [Network Security](#network-security)
+- [Cloud Security Fundamentals](#cloud-security-fundamentals)
+- [Security in CI/CD Pipelines](#security-in-cicd-pipelines)
+- [Compliance & Audit Frameworks](#compliance--audit-frameworks)
+- [Runtime Security with Falco](#runtime-security-with-falco)
+- [Tools & Commands Reference](#tools--commands-reference)
+- [Hands-On Labs](#hands-on-labs)
+- [Further Reading](#further-reading)
+- [Supply Chain Security](#supply-chain-security)
+- [Falco: Runtime Security](#falco-runtime-security)
+- [Zero Trust Architecture](#zero-trust-architecture)
+- [Container Security Deep Dive](#container-security-deep-dive)
+- [Secret Rotation Patterns](#secret-rotation-patterns)
+- [Kubernetes Security Hardening](#kubernetes-security-hardening)
+- [Common Mistakes & Pitfalls](#common-mistakes--pitfalls)
+- [Interview Prep](#interview-prep)
+- [A Day in the Life: Senior Security Engineer at a Fintech Startup](#a-day-in-the-life-senior-security-engineer-at-a-fintech-startup)
+- [DAST in CI/CD](#dast-in-cicd)
+- [Cloud Security Posture Management (CSPM)](#cloud-security-posture-management-cspm)
+- [Security as Code: OPA, Kyverno, and Conftest](#security-as-code-opa-kyverno-and-conftest)
+- [Secrets in VCS: Detection and Response](#secrets-in-vcs-detection-and-response)
+- [Vulnerability Management Programme](#vulnerability-management-programme)
+- [A Day in the Life](#a-day-in-the-life)
+- [Further Reading (Supplemental)](#further-reading-supplemental)
+- [Security Incident Response Runbook](#security-incident-response-runbook)
+- [Threat Modelling for Platform Teams](#threat-modelling-for-platform-teams)
 
 ---
 
@@ -2627,6 +2645,17 @@ kubectl get clusterrolebindings -o json | jq '
 - **Assuming internal traffic is safe.** Zero Trust means no implicit trust for internal traffic. Service-to-service calls inside the cluster should use mTLS. A compromised service should not automatically trust its neighbours.
 - **Skipping SBOM.** SBOMs are the foundation of supply chain security. Without one, you cannot answer "are we affected by CVE-X?" quickly. Generate SBOMs as part of every build.
 - **No IR plan for containers.** When a container is suspected of being compromised, what do you do? Isolate it (NetworkPolicy label), capture forensics (`kubectl cp` the filesystem), preserve logs, then terminate. Document this process before you need it.
+- **Scanning in CI but not in production.** New CVEs emerge daily; an image that was clean at build time may be vulnerable a week later when it is still running in production. Scan running containers on a schedule.
+- **Ignoring transitive dependencies.** Your direct dependencies may be fine, but their dependencies carry the actual vulnerability. Tools like `grype` and `trivy` scan the full dependency tree including OS packages.
+- **Not rotating credentials after a team member leaves.** Shared credentials used by a former employee should be rotated immediately on their departure. Many teams skip this step or delay it.
+- **Over-permissive RBAC "to make things work".** Granting `cluster-admin` or `*` permissions because debugging is hard. Document every permission grant and require a business justification.
+- **Treating security scanning as a one-time activity.** Security is a continuous process. Scanning once on a feature branch then never again means drift accumulates undetected.
+- **Not testing your policies.** Gatekeeper and Kyverno policies that were never tested can silently fail to enforce or cause unexpected rejections. Write unit tests for policies with conftest or kyverno's built-in test runner.
+- **No break-glass procedure.** What happens when Vault is unavailable and your app cannot start? You need a documented, tested emergency access procedure that does not require compromising security.
+- **Not scanning Helm charts or Kustomize output.** Only scanning raw Kubernetes manifests and missing that Helm templates render insecure configurations. Always scan the rendered output, not the templates.
+- **Confusing compliance with security.** Passing a SOC 2 audit does not mean you are secure. Compliance is a minimum bar; security requires deeper, continuous work.
+- **No supply chain attestation for internal images.** You sign public base images but forget to sign your own internally-built images. Attackers who compromise your registry can swap images undetected.
+- **Ignoring security advisories for non-production environments.** Staging and dev environments with production data or production credentials are attack targets. Apply the same security controls everywhere.
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -2669,6 +2698,27 @@ First, isolate without destroying evidence. Apply a NetworkPolicy label to the p
 
 **Q12: What is the difference between SAST and DAST in a DevSecOps context?**
 SAST (Static Application Security Testing) analyses source code or compiled binaries without executing them, looking for known vulnerability patterns: SQL injection risks, hardcoded credentials, dangerous function calls, insecure dependencies. Tools: Semgrep, SonarQube, CodeQL. Run in CI on every pull request. DAST (Dynamic Application Security Testing) runs against a live, running application and probes it from the outside as an attacker would: sending malicious payloads, testing for authentication bypass, checking for injection vulnerabilities. Tools: OWASP ZAP, Nuclei. Run against a staging environment after deployment. SAST is fast and catches many issues but has false positives; DAST catches issues that only emerge at runtime but takes longer and requires a running environment.
+
+**Q13: How do you approach a security incident where a secret was committed to a public GitHub repository?**
+Immediately revoke the credential — do not wait. Even if the repository was public for 30 seconds, automated scanners (bots monitoring GitHub for secrets) may have already captured it. Then investigate: when was the commit pushed? How long was the repo public? Pull access logs for the compromised credential looking for any use. Notify relevant stakeholders. Remove the secret from git history using `git filter-repo` and force-push. After remediation, run a post-incident review: how did this happen? Pre-commit hooks? Developer training? Secrets manager adoption blockers? Document findings and implement prevention measures.
+
+**Q14: How do you handle zero-day vulnerabilities in production containers?**
+First, assess quickly: is the vulnerable component actually reachable? Many zero-days in CVE databases affect components that are not code-path reachable in your specific application. Use `grype --only-fixed` to see if a patched version is even available yet. If it is exploitable and unpatched: apply compensating controls (WAF rules for known exploit patterns, network policy to restrict access, Falco rules to detect exploitation attempts). If a patch is available: rebuild and redeploy all affected images immediately, prioritising internet-facing services. If no patch: assess whether the service can be temporarily restricted (IP allowlist, disable affected feature) until a patch is available. Communicate status to stakeholders on a regular cadence.
+
+**Q15: What is the difference between a security group and a network policy in AWS/Kubernetes?**
+AWS Security Groups are stateful L3/L4 firewalls that control traffic to EC2 instances, RDS databases, Lambda functions, and other AWS resources. They operate at the VPC level. Kubernetes NetworkPolicies are L3/L4 policies applied at the pod level using the cluster's CNI plugin (Calico, Cilium). They control traffic between pods and between pods and external endpoints using pod selectors and namespace selectors. A request from a pod to an RDS database must pass both: the NetworkPolicy must allow the pod to egress to the RDS subnet, and the security group on the RDS instance must allow ingress from the pod's IP or security group. Both are required for a complete defence-in-depth approach.
+
+**Q16: Describe how you would implement mTLS between services in a Kubernetes cluster.**
+The cleanest approach is a service mesh like Istio or Linkerd that handles mTLS transparently without application changes. With Istio, you enable PeerAuthentication in STRICT mode for the namespace — this requires all inbound connections to present a valid client certificate issued by the mesh's certificate authority. The sidecar proxies (Envoy) handle the TLS handshake; the application sees plain HTTP. Certificates are automatically rotated every 24 hours using SPIFFE/SPIRE identities. For service-to-service authorisation (not just authentication), AuthorizationPolicy resources specify which service identities are allowed to call which paths with which methods. Without a service mesh, you implement mTLS at the application level — which works but requires every service team to correctly implement certificate management, renewal, and verification.
+
+**Q17: What tools do you use to maintain Kubernetes CIS Benchmark compliance?**
+`kube-bench` runs the CIS Kubernetes Benchmark checks against your nodes and control plane, producing a pass/fail report with remediation guidance for each check. Run it from CI against a test cluster before promoting to production. For ongoing monitoring, integrate kube-bench output into DefectDojo or a SIEM. For preventive enforcement, Gatekeeper with the `gatekeeper-library` policy library provides OPA policies for common CIS benchmark controls (no privileged containers, resource limits required, no host network, no host path mounts). For EKS, AWS Inspector v2 includes Kubernetes security findings. For self-managed clusters, Trivy Operator (running as a cluster operator) continuously scans workloads and produces `VulnerabilityReport` and `ConfigAuditReport` CRDs you can query with `kubectl`.
+
+**Q18: How do you convince a development team to adopt security practices without creating friction?**
+Security that blocks work is security that gets worked around. The goal is to make the secure path the path of least resistance. Start with the highest-signal, lowest-friction tools: enable Dependabot or Renovate so dependency updates arrive as automated PRs developers can merge with one click. Add `gitleaks` as a pre-commit hook — most developers are grateful when it catches a mistake before it reaches the repository. When you find a vulnerability, bring a fix along with the finding — a PR that upgrades the dependency with a passing test suite is far better received than a Jira ticket saying "you have a critical CVE". Build champions in each team. Make security wins visible: when a scan catches something real, share the story (without blame). When teams reach milestones (e.g., all images on latest base, zero P0 findings for 30 days), recognise it.
+
+**Q19: What are Falco's limitations?**
+Falco's strength is runtime detection — it catches attackers who have already bypassed your preventive controls. Its limitations: it generates significant noise in environments with complex workloads and requires tuning before it is useful. The default rules fire frequently in development environments where developers exec into pods regularly. It detects but does not prevent (combine with an admission controller and network policies for prevention). False positives require ongoing maintenance as application behaviour changes. The kernel module approach carries risk on production nodes (potential kernel panics with buggy versions) — prefer the eBPF probe.
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -3298,82 +3348,6 @@ Sample Monthly Report Excerpt:
   Average MTTR for Critical: 1.8 days (target: 3 days)
   Images with no Critical CVEs: 94% (target: 95%)
 ```
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Common Mistakes & Pitfalls
-
-- **Scanning in CI but not in production** — new CVEs emerge daily; an image that was clean at build time may be vulnerable a week later when it is still running in production. Scan running containers on a schedule.
-- **Ignoring transitive dependencies** — your direct dependencies may be fine, but their dependencies carry the actual vulnerability. Tools like `grype` and `trivy` scan the full dependency tree including OS packages.
-- **Storing secrets in environment variables set at deploy time** — if the deployment manifest is in git (as it should be), hardcoded env var values end up in version control. Use Vault, AWS Secrets Manager, or External Secrets Operator to inject at runtime.
-- **Not rotating credentials after a team member leaves** — shared credentials used by a former employee should be rotated immediately on their departure. Many teams skip this step or delay it.
-- **Over-permissive RBAC "to make things work"** — granting `cluster-admin` or `*` permissions because debugging is hard. Document every permission grant and require a business justification.
-- **Running containers as root because it was easier to set up** — root in a container can still escape in certain kernel vulnerability scenarios. Add `runAsNonRoot: true` and `allowPrivilegeEscalation: false` to every pod spec.
-- **Treating security scanning as a one-time activity** — security is a continuous process. Scanning once on a feature branch then never again means drift accumulates undetected.
-- **Not testing your policies** — Gatekeeper and Kyverno policies that were never tested can silently fail to enforce or cause unexpected rejections. Write unit tests for policies with conftest or kyverno's built-in test runner.
-- **Alert fatigue from too-wide Falco rules** — noisy Falco rules that fire constantly get disabled or silenced. Tune rules to your environment's actual baseline before deploying to production.
-- **No break-glass procedure** — what happens when Vault is unavailable and your app cannot start? You need a documented, tested emergency access procedure that does not require compromising security.
-- **Skipping network policies** — by default, all pods in a Kubernetes cluster can communicate with all other pods. Without NetworkPolicies, a compromised pod has free lateral movement across the cluster.
-- **Not scanning Helm charts or Kustomize output** — only scanning raw Kubernetes manifests and missing that Helm templates render insecure configurations. Always scan the rendered output, not the templates.
-- **Confusing compliance with security** — passing a SOC 2 audit does not mean you are secure. Compliance is a minimum bar; security requires deeper, continuous work.
-- **No supply chain attestation for internal images** — you sign public base images but forget to sign your own internally-built images. Attackers who compromise your registry can swap images undetected.
-- **Ignoring security advisories for non-production environments** — staging and dev environments with production data or production credentials are attack targets. Apply the same security controls everywhere.
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Interview Prep
-
-**Q: What is the difference between SAST and DAST, and when do you use each?**
-
-A: SAST (Static Application Security Testing) analyses source code, bytecode, or binaries without executing the program. It catches issues like hardcoded secrets, SQL injection patterns, and insecure function calls early in the development cycle — ideally in the IDE or as a PR check. DAST (Dynamic Application Security Testing) sends real requests to a running application and observes responses. It catches runtime issues like authentication bypasses, SSRF, and misconfigurations that only manifest when the application is executing. A mature security programme uses both: SAST in the PR pipeline (fast, no infrastructure needed), DAST against a staging environment (slower, catches runtime issues), and SCA (Software Composition Analysis) to track vulnerable dependencies across both.
-
-**Q: How do you manage secrets in a Kubernetes cluster?**
-
-A: Several approaches at increasing levels of security. At minimum, Kubernetes native Secrets with RBAC restricting access and etcd encryption at rest enabled. Better: External Secrets Operator pulling from AWS Secrets Manager or GCP Secret Manager, which keeps the actual secret values out of the cluster entirely. Best: HashiCorp Vault with dynamic secrets — the application authenticates with Vault using its pod identity (Kubernetes auth method), Vault generates short-lived credentials specific to that instance, and those credentials expire automatically. For database credentials, Vault's database secrets engine generates a unique username/password per application instance with an 8-hour TTL. No rotation needed; the credentials expire and are regenerated automatically.
-
-**Q: Explain the concept of least privilege in the context of Kubernetes RBAC.**
-
-A: Least privilege means each identity (service account, user, CI system) has exactly the permissions required for its function and nothing more. In Kubernetes, this means creating a dedicated service account per workload (not using the default service account), writing Role or ClusterRole objects that grant only the specific verbs (`get`, `list`, `watch`) on the specific resources (`pods`, `configmaps`) the workload actually needs, and binding them with RoleBinding (namespace-scoped, not ClusterRoleBinding where possible). Audit existing RBAC with `kubectl auth can-i --list --as=system:serviceaccount:namespace:service-account` and `rbac-lookup`. Common violations: service accounts with `*` verbs or wildcard resources, unnecessary ClusterRoleBindings, CI systems with `cluster-admin` because it was easier to set up.
-
-**Q: What is container image signing and why does it matter?**
-
-A: Image signing creates a cryptographic attestation that a specific image was built by a specific system at a specific time. With cosign and keyless signing (using OIDC tokens from GitHub Actions or Google Cloud), the signature is stored in the same registry as the image. At deploy time, your admission controller (Kyverno, Connaisseur, or a custom webhook) verifies the signature before allowing the pod to schedule. If an attacker compromises your registry and replaces an image, the signature will not match and the image will be rejected. This is a core component of supply chain security — defending the path from source code to running container.
-
-**Q: How do you approach a security incident where a secret was committed to a public GitHub repository?**
-
-A: Immediately revoke the credential — do not wait. Even if the repository was public for 30 seconds, automated scanners (bots monitoring GitHub for secrets) may have already captured it. Then investigate: when was the commit pushed? How long was the repo public? Pull access logs for the compromised credential looking for any use. Notify relevant stakeholders. Remove the secret from git history using `git filter-repo` and force-push. After remediation, run a post-incident review: how did this happen? Pre-commit hooks? Developer training? Secrets manager adoption blockers? Document findings and implement prevention measures.
-
-**Q: What is SLSA and why should you care about it?**
-
-A: SLSA (Supply Levels for Software Artifacts) is a framework developed by Google that defines a set of security controls for the software supply chain. The four levels (L1–L4) require progressively stronger guarantees: L1 requires a build script and SBOM; L2 requires a version-controlled build service that generates signed provenance; L3 requires a hardened build platform where build steps cannot influence each other; L4 (aspirational) requires two-party review of all changes. Most organisations target SLSA L2 as a practical first milestone: builds run in GitHub Actions or equivalent, provenance is generated by `slsa-github-generator`, and attestations are verified before deployment. The practical value is detecting supply chain compromises: if an attacker modifies your build pipeline or replaces a dependency, the provenance attestation will not verify.
-
-**Q: How do you handle zero-day vulnerabilities in production containers?**
-
-A: First, assess quickly: is the vulnerable component actually reachable? Many zero-days in CVE databases affect components that are not code-path reachable in your specific application. Use `grype --only-fixed` to see if a patched version is even available yet. If it is exploitable and unpatched: apply compensating controls (WAF rules for known exploit patterns, network policy to restrict access, Falco rules to detect exploitation attempts). If a patch is available: rebuild and redeploy all affected images immediately, prioritising internet-facing services. If no patch: assess whether the service can be temporarily restricted (IP allowlist, disable affected feature) until a patch is available. Communicate status to stakeholders on a regular cadence.
-
-**Q: What is the difference between a security group and a network policy in AWS/Kubernetes?**
-
-A: AWS Security Groups are stateful L3/L4 firewalls that control traffic to EC2 instances, RDS databases, Lambda functions, and other AWS resources. They operate at the VPC level. Kubernetes NetworkPolicies are L3/L4 policies applied at the pod level using the cluster's CNI plugin (Calico, Cilium). They control traffic between pods and between pods and external endpoints using pod selectors and namespace selectors. A request from a pod to an RDS database must pass both: the NetworkPolicy must allow the pod to egress to the RDS subnet, and the security group on the RDS instance must allow ingress from the pod's IP or security group. Both are required for a complete defence-in-depth approach.
-
-**Q: Describe how you would implement mTLS between services in a Kubernetes cluster.**
-
-A: The cleanest approach is a service mesh like Istio or Linkerd that handles mTLS transparently without application changes. With Istio, you enable PeerAuthentication in STRICT mode for the namespace — this requires all inbound connections to present a valid client certificate issued by the mesh's certificate authority. The sidecar proxies (Envoy) handle the TLS handshake; the application sees plain HTTP. Certificates are automatically rotated every 24 hours using SPIFFE/SPIRE identities. For service-to-service authorisation (not just authentication), AuthorizationPolicy resources specify which service identities are allowed to call which paths with which methods. Without a service mesh, you implement mTLS at the application level — which works but requires every service team to correctly implement certificate management, renewal, and verification.
-
-**Q: What tools do you use to maintain Kubernetes CIS Benchmark compliance?**
-
-A: `kube-bench` runs the CIS Kubernetes Benchmark checks against your nodes and control plane, producing a pass/fail report with remediation guidance for each check. Run it from CI against a test cluster before promoting to production. For ongoing monitoring, integrate kube-bench output into DefectDojo or a SIEM. For preventive enforcement, Gatekeeper with the `gatekeeper-library` policy library provides OPA policies for common CIS benchmark controls (no privileged containers, resource limits required, no host network, no host path mounts). For EKS, AWS Inspector v2 includes Kubernetes security findings. For self-managed clusters, Trivy Operator (running as a cluster operator) continuously scans workloads and produces `VulnerabilityReport` and `ConfigAuditReport` CRDs you can query with `kubectl`.
-
-**Q: How do you convince a development team to adopt security practices without creating friction?**
-
-A: Security that blocks work is security that gets worked around. The goal is to make the secure path the path of least resistance. Start with the highest-signal, lowest-friction tools: enable Dependabot or Renovate so dependency updates arrive as automated PRs developers can merge with one click. Add `gitleaks` as a pre-commit hook — most developers are grateful when it catches a mistake before it reaches the repository. When you find a vulnerability, bring a fix along with the finding — a PR that upgrades the dependency with a passing test suite is far better received than a Jira ticket saying "you have a critical CVE". Build champions in each team. Make security wins visible: when a scan catches something real, share the story (without blame). When teams reach milestones (e.g., all images on latest base, zero P0 findings for 30 days), recognise it.
-
-**Q: What is Falco and what are its limitations?**
-
-A: Falco is a runtime threat detection tool that monitors Linux system calls using eBPF or a kernel module. It detects suspicious behaviours like shell execution in containers, privilege escalation, reading sensitive files (`/etc/shadow`, `/proc/keys`), network connections from unexpected processes, and container image changes. Its strength is runtime detection — it catches attackers who have already bypassed your preventive controls. Its limitations: it generates significant noise in environments with complex workloads and requires tuning before it is useful. The default rules fire frequently in development environments where developers exec into pods regularly. It detects but does not prevent (combine with an admission controller and network policies for prevention). False positives require ongoing maintenance as application behaviour changes. The kernel module approach carries risk on production nodes (potential kernel panics with buggy versions) — prefer the eBPF probe or eBPF-based alternatives.
 
 [↑ Back to TOC](#table-of-contents)
 

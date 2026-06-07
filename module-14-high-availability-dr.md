@@ -10,23 +10,44 @@
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Learning Objectives](#learning-objectives)
-3. [Core Concepts: RTO, RPO, SLA](#core-concepts-rto-rpo-sla)
-4. [Availability Tiers & Nines](#availability-tiers--nines)
-5. [Failure Mode Analysis](#failure-mode-analysis)
-6. [High Availability Architecture Patterns](#high-availability-architecture-patterns)
-7. [Load Balancing](#load-balancing)
-8. [Database High Availability](#database-high-availability)
-9. [Backup Strategies](#backup-strategies)
-10. [Multi-Region Architecture](#multi-region-architecture)
-11. [Kubernetes HA](#kubernetes-ha)
-12. [Disaster Recovery Planning](#disaster-recovery-planning)
-13. [DR Testing & Chaos Engineering](#dr-testing--chaos-engineering)
-14. [Cloud HA Services](#cloud-ha-services)
-15. [Tools & Commands Reference](#tools--commands-reference)
-16. [Hands-On Labs](#hands-on-labs)
-17. [Further Reading](#further-reading)
+- [Overview](#overview)
+- [Learning Objectives](#learning-objectives)
+- [Core Concepts: RTO, RPO, SLA](#core-concepts-rto-rpo-sla)
+- [Availability Tiers & Nines](#availability-tiers--nines)
+- [Failure Mode Analysis](#failure-mode-analysis)
+- [High Availability Architecture Patterns](#high-availability-architecture-patterns)
+- [Load Balancing](#load-balancing)
+- [Database High Availability](#database-high-availability)
+- [Backup Strategies](#backup-strategies)
+- [Multi-Region Architecture](#multi-region-architecture)
+- [Kubernetes HA](#kubernetes-ha)
+- [Disaster Recovery Planning](#disaster-recovery-planning)
+- [DR Testing & Chaos Engineering](#dr-testing--chaos-engineering)
+- [Cloud HA Services](#cloud-ha-services)
+- [Tools & Commands Reference](#tools--commands-reference)
+- [Hands-On Labs](#hands-on-labs)
+- [Further Reading](#further-reading)
+- [Chaos Engineering](#chaos-engineering)
+- [Database High Availability Deep Dive](#database-high-availability-deep-dive)
+- [Backup Strategies — Advanced Patterns](#backup-strategies--advanced-patterns)
+- [SLO-Based Reliability Engineering](#slo-based-reliability-engineering)
+- [Load Testing and Capacity Planning](#load-testing-and-capacity-planning)
+- [DNS Failover Patterns](#dns-failover-patterns)
+- [Immutable Infrastructure and Blue-Green Deployments](#immutable-infrastructure-and-blue-green-deployments)
+- [Common Mistakes & Pitfalls](#common-mistakes--pitfalls)
+- [Interview Prep](#interview-prep)
+- [A Day in the Life](#a-day-in-the-life)
+- [Business Continuity Planning](#business-continuity-planning)
+- [Incident Response Framework](#incident-response-framework)
+- [Multi-Region Kubernetes](#multi-region-kubernetes)
+- [Real Incident Postmortems (Anonymised)](#real-incident-postmortems-anonymised)
+- [Further Reading (Supplemental)](#further-reading-supplemental)
+- [Caching Strategies for High Availability](#caching-strategies-for-high-availability)
+- [Graceful Degradation Patterns](#graceful-degradation-patterns)
+- [HA Checklist for Production Services](#ha-checklist-for-production-services)
+- [Progressive Delivery for HA](#progressive-delivery-for-ha)
+- [Observability for Reliability](#observability-for-reliability)
+- [Reliability Maturity Model](#reliability-maturity-model)
 
 ---
 
@@ -467,7 +488,10 @@ sync_binlog = 1
 
 # Create replication user on primary
 CREATE USER 'replicator'@'192.168.1.%' IDENTIFIED BY 'ReplPassword123!';
-GRANT REPLICATION SOURCE ON *.* TO 'replicator'@'192.168.1.%';
+GRANT REPLICATION SLAVE ON *.* TO 'replicator'@'192.168.1.%';
+# Note: the privilege is still named REPLICATION SLAVE in every MySQL version —
+# only the statements were renamed (CHANGE REPLICATION SOURCE TO, START REPLICA).
+# MariaDB 10.5+ also accepts REPLICATION REPLICA as an alias for the privilege.
 FLUSH PRIVILEGES;
 
 # Get current binary log position (lock tables briefly)
@@ -1830,9 +1854,9 @@ aws rds remove-from-global-cluster \
 
 ---
 
-## Backup Strategies
+## Backup Strategies — Advanced Patterns
 
-The 3-2-1 backup rule: 3 copies of data, on 2 different media types, with 1 copy offsite. For cloud-native systems this translates to: automated daily snapshots in the primary region, cross-region replication, and immutable point-in-time recovery (PITR) enabled.
+Building on the 3-2-1 rule covered earlier: for cloud-native systems it translates to automated daily snapshots in the primary region, cross-region replication, and immutable point-in-time recovery (PITR) enabled. This section covers production-grade patterns beyond the basics.
 
 ### Kubernetes Backup with Velero
 

@@ -28,6 +28,35 @@
 - [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
+- [OCI Specification Explained](#oci-specification-explained)
+- [Container Runtime Comparison](#container-runtime-comparison)
+- [BuildKit Deep Dive](#buildkit-deep-dive)
+- [SBOM Generation and Image Signing](#sbom-generation-and-image-signing)
+- [Distroless and Minimal Images](#distroless-and-minimal-images)
+- [Container Security Deep Dive](#container-security-deep-dive)
+- [Container Image Vulnerability Scanning](#container-image-vulnerability-scanning)
+- [Multi-Container Patterns](#multi-container-patterns)
+- [Container Networking Deep Dive](#container-networking-deep-dive)
+- [Compose in Production Patterns](#compose-in-production-patterns)
+- [Common Mistakes & Pitfalls](#common-mistakes--pitfalls)
+- [Interview Prep](#interview-prep)
+- [A Day in the Life](#a-day-in-the-life)
+- [Container Resource Management](#container-resource-management)
+- [Container Storage Patterns](#container-storage-patterns)
+- [Container Tool Comparison: Docker vs Podman vs nerdctl](#container-tool-comparison-docker-vs-podman-vs-nerdctl)
+- [Container Image Best Practices](#container-image-best-practices)
+- [Container Networking Deep Dive — Namespaces & Kubernetes](#container-networking-deep-dive--namespaces--kubernetes)
+- [Podman and systemd Integration](#podman-and-systemd-integration)
+- [Container Security Checklist](#container-security-checklist)
+- [Container Debugging Techniques](#container-debugging-techniques)
+- [Container Registry Operations](#container-registry-operations)
+- [Advanced Dockerfile Patterns](#advanced-dockerfile-patterns)
+- [Real-World War Story: The Image That Would Not Stop Growing](#real-world-war-story-the-image-that-would-not-stop-growing)
+- [Docker Compose in Production-Adjacent Environments](#docker-compose-in-production-adjacent-environments)
+- [Container Performance Optimisation](#container-performance-optimisation)
+- [Key Container Commands Reference](#key-container-commands-reference)
+- [OCI Image Specification and What It Means in Practice](#oci-image-specification-and-what-it-means-in-practice)
+- [Containers in CI/CD Pipelines](#containers-in-cicd-pipelines)
 
 ---
 
@@ -3141,7 +3170,7 @@ podman push registry.example.com/myapp:${BRANCH_NAME}
 
 ---
 
-## Container Networking Deep Dive
+## Container Networking Deep Dive — Namespaces & Kubernetes
 
 ### How Container Networking Works
 

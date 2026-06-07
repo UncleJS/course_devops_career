@@ -24,6 +24,31 @@
 - [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
+- [Trunk-Based Development](#trunk-based-development)
+- [Supply Chain Security in CI/CD](#supply-chain-security-in-cicd)
+- [DORA Metrics: Measuring Pipeline Performance](#dora-metrics-measuring-pipeline-performance)
+- [Pipeline Performance Optimisation](#pipeline-performance-optimisation)
+- [Database Migrations in CI/CD](#database-migrations-in-cicd)
+- [Common Mistakes & Pitfalls](#common-mistakes--pitfalls)
+- [Interview Prep](#interview-prep)
+- [A Day in the Life: Platform Engineer (CI/CD Focus)](#a-day-in-the-life-platform-engineer-cicd-focus)
+- [Progressive Delivery with Argo Rollouts](#progressive-delivery-with-argo-rollouts)
+- [Self-Hosted CI Runners](#self-hosted-ci-runners)
+- [Environment Promotion Workflows](#environment-promotion-workflows)
+- [Release Engineering Patterns](#release-engineering-patterns)
+- [Testing Strategy in CI/CD](#testing-strategy-in-cicd)
+- [CI/CD for Monorepos](#cicd-for-monorepos)
+- [Reusable Workflows and Composite Actions](#reusable-workflows-and-composite-actions)
+- [Pipeline Observability and Alerting](#pipeline-observability-and-alerting)
+- [Jenkins Advanced Patterns](#jenkins-advanced-patterns)
+- [Feature Flag Lifecycle Management](#feature-flag-lifecycle-management)
+- [Secrets Management in CI/CD](#secrets-management-in-cicd)
+- [Artifact Management and Container Registries](#artifact-management-and-container-registries)
+- [Multi-Cloud and Hybrid CI/CD Patterns](#multi-cloud-and-hybrid-cicd-patterns)
+- [Compliance and Audit in CI/CD](#compliance-and-audit-in-cicd)
+- [Real-World War Story: The Deployment That Took Down Black Friday](#real-world-war-story-the-deployment-that-took-down-black-friday)
+- [Tooling Reference Card](#tooling-reference-card)
+- [Further Reading (Supplemental)](#further-reading-supplemental)
 
 ---
 
@@ -3988,7 +4013,7 @@ npx semantic-release --verify-conditions
 
 ---
 
-## Further Reading
+## Further Reading (Supplemental)
 
 ### Books
 

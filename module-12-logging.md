@@ -10,30 +10,43 @@
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Learning Objectives](#learning-objectives)
-3. [Logging Fundamentals](#logging-fundamentals)
-4. [Structured Logging](#structured-logging)
-5. [The ELK Stack](#the-elk-stack)
-   - [Elasticsearch](#elasticsearch)
-   - [Logstash](#logstash)
-   - [Kibana](#kibana)
-   - [Filebeat](#filebeat)
-   - [Full ELK Deployment Example](#full-elk-deployment-example)
-6. [Grafana Loki Stack](#grafana-loki-stack)
-   - [Loki Architecture](#loki-architecture)
-   - [Promtail](#promtail)
-   - [LogQL](#logql)
-   - [Loki Deployment](#loki-deployment)
-7. [Fluentd & Fluent Bit](#fluentd--fluent-bit)
-8. [Kubernetes Logging Patterns](#kubernetes-logging-patterns)
-9. [Log Retention, Rotation & Compliance](#log-retention-rotation--compliance)
-10. [Centralized Logging Architecture Patterns](#centralized-logging-architecture-patterns)
-11. [Comparing Logging Stacks](#comparing-logging-stacks)
-12. [Advanced: Log-Based Alerting & Anomaly Detection](#advanced-log-based-alerting--anomaly-detection)
-13. [Tools & Commands Reference](#tools--commands-reference)
-14. [Hands-On Labs](#hands-on-labs)
-15. [Further Reading](#further-reading)
+- [Overview](#overview)
+- [Learning Objectives](#learning-objectives)
+- [Logging Fundamentals](#logging-fundamentals)
+- [Structured Logging](#structured-logging)
+- [The ELK Stack](#the-elk-stack)
+- [Grafana Loki Stack](#grafana-loki-stack)
+- [Fluentd & Fluent Bit](#fluentd--fluent-bit)
+- [Kubernetes Logging Patterns](#kubernetes-logging-patterns)
+- [Log Retention, Rotation & Compliance](#log-retention-rotation--compliance)
+- [Centralized Logging Architecture Patterns](#centralized-logging-architecture-patterns)
+- [Comparing Logging Stacks](#comparing-logging-stacks)
+- [Advanced: Log-Based Alerting & Anomaly Detection](#advanced-log-based-alerting--anomaly-detection)
+- [Tools & Commands Reference](#tools--commands-reference)
+- [Hands-On Labs](#hands-on-labs)
+- [Further Reading](#further-reading)
+- [Elasticsearch Index Lifecycle Management](#elasticsearch-index-lifecycle-management)
+- [OpenSearch vs Elasticsearch](#opensearch-vs-elasticsearch)
+- [Vector: Modern Log Pipeline](#vector-modern-log-pipeline)
+- [Compliance Logging](#compliance-logging)
+- [Kubernetes Logging Architecture](#kubernetes-logging-architecture)
+- [Log-Based Metrics and Alerting](#log-based-metrics-and-alerting)
+- [Distributed Tracing and Logs Correlation](#distributed-tracing-and-logs-correlation)
+- [Common Mistakes & Pitfalls](#common-mistakes--pitfalls)
+- [Interview Prep](#interview-prep)
+- [A Day in the Life: Platform Engineer, Logging Focus](#a-day-in-the-life-platform-engineer-logging-focus)
+- [SIEM Integration](#siem-integration)
+- [Log Storage Cost Optimisation](#log-storage-cost-optimisation)
+- [Real-World War Story: The Log That Saved the Company](#real-world-war-story-the-log-that-saved-the-company)
+- [Tooling Reference Card](#tooling-reference-card)
+- [Structured Logging Best Practices](#structured-logging-best-practices)
+- [Loki Advanced Patterns](#loki-advanced-patterns)
+- [Further Reading (Supplemental)](#further-reading-supplemental)
+- [Log Pipeline Reliability](#log-pipeline-reliability)
+- [Multi-Cluster and Multi-Region Logging](#multi-cluster-and-multi-region-logging)
+- [Log Data Governance](#log-data-governance)
+- [Elasticsearch Performance Tuning](#elasticsearch-performance-tuning)
+- [Log-Based Anomaly Detection](#log-based-anomaly-detection)
 
 ---
 
@@ -3159,7 +3172,7 @@ groups:
 
 ---
 
-## Further Reading
+## Further Reading (Supplemental)
 
 ### Books
 

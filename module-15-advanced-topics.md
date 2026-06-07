@@ -10,29 +10,36 @@
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Learning Objectives](#learning-objectives)
-3. [GitOps](#gitops)
-   - [GitOps Principles](#gitops-principles)
-   - [ArgoCD](#argocd)
-   - [Flux CD](#flux-cd)
-   - [ArgoCD vs Flux](#argocd-vs-flux)
-4. [Service Mesh](#service-mesh)
-   - [Why Service Mesh?](#why-service-mesh)
-   - [Istio](#istio)
-   - [Linkerd](#linkerd)
-   - [Istio vs Linkerd](#istio-vs-linkerd)
-5. [Kubernetes Operators & CRDs](#kubernetes-operators--crds)
-6. [Advanced Terraform Patterns](#advanced-terraform-patterns)
-7. [Platform Engineering](#platform-engineering)
-8. [FinOps — Cloud Cost Management](#finops--cloud-cost-management)
-9. [AI & LLMs in DevOps](#ai--llms-in-devops)
-10. [Advanced: Chaos Engineering](#advanced-chaos-engineering)
-11. [Capstone Project](#capstone-project)
-12. [Career Paths & Certification Roadmap](#career-paths--certification-roadmap)
-13. [Tools & Commands Reference](#tools--commands-reference)
-14. [Hands-On Labs](#hands-on-labs)
-15. [Further Reading](#further-reading)
+- [Overview](#overview)
+- [Learning Objectives](#learning-objectives)
+- [GitOps](#gitops)
+- [Service Mesh](#service-mesh)
+- [Kubernetes Operators & CRDs](#kubernetes-operators--crds)
+- [Advanced Terraform Patterns](#advanced-terraform-patterns)
+- [Platform Engineering](#platform-engineering)
+- [FinOps — Cloud Cost Management](#finops--cloud-cost-management)
+- [AI & LLMs in DevOps](#ai--llms-in-devops)
+- [Advanced: Chaos Engineering](#advanced-chaos-engineering)
+- [Capstone Project](#capstone-project)
+- [Career Paths & Certification Roadmap](#career-paths--certification-roadmap)
+- [Tools & Commands Reference](#tools--commands-reference)
+- [Hands-On Labs](#hands-on-labs)
+- [Further Reading](#further-reading)
+- [Internal Developer Platform (IDP) Design](#internal-developer-platform-idp-design)
+- [eBPF in Production](#ebpf-in-production)
+- [Platform Engineering Maturity](#platform-engineering-maturity)
+- [AI/ML Infrastructure for DevOps Engineers](#aiml-infrastructure-for-devops-engineers)
+- [The DevOps Career Roadmap](#the-devops-career-roadmap)
+- [Cost-Aware Platform Engineering](#cost-aware-platform-engineering)
+- [Common Mistakes & Pitfalls](#common-mistakes--pitfalls)
+- [Interview Prep](#interview-prep)
+- [A Day in the Life](#a-day-in-the-life)
+- [Advanced Terraform Patterns — Workspaces & Testing](#advanced-terraform-patterns--workspaces--testing)
+- [Service Mesh Advanced Operations](#service-mesh-advanced-operations)
+- [Advanced CI/CD Patterns](#advanced-cicd-patterns)
+- [SRE Practice: Advanced Topics](#sre-practice-advanced-topics)
+- [Further Reading (Supplemental)](#further-reading-supplemental)
+- [Congratulations!](#congratulations)
 
 ---
 
@@ -2119,33 +2126,6 @@ mkdir -p app/{frontend,api} k8s/{base,overlays/{staging,production}} \
 
 ---
 
-## Congratulations!
-
-You have completed the **DevOps Career Path** course. You now have the knowledge and practical skills to:
-
-- Build and operate production Linux infrastructure
-- Write automation scripts and manage configuration with Ansible
-- Deploy containerized applications with Docker and Podman on Kubernetes
-- Provision cloud infrastructure with Terraform and OpenTofu
-- Build CI/CD pipelines with GitHub Actions, GitLab CI, and Jenkins
-- Monitor systems with Prometheus, Grafana, and Zabbix
-- Centralize logs with the ELK Stack and Loki
-- Secure infrastructure with DevSecOps practices, Vault, and OPA
-- Design HA systems and execute disaster recovery
-- Implement GitOps with ArgoCD and Flux
-- Manage service-to-service security with Istio or Linkerd
-
-**Next steps:**
-1. Complete the capstone project
-2. Pursue the CKA certification
-3. Build something real — the best way to learn is to deploy
-4. Contribute to open-source DevOps tooling
-5. Share your knowledge with others
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
 ## Internal Developer Platform (IDP) Design
 
 Platform engineering has emerged as the discipline that sits between traditional DevOps and product engineering. Rather than individual teams each solving the same infrastructure problems, a platform team builds a "golden path" — a paved road that makes the right way to do things also the easy way. The Internal Developer Platform (IDP) is the tangible product that the platform team delivers.
@@ -2922,7 +2902,7 @@ The month's biggest platform investment — the GitHub Actions migration — is 
 
 ---
 
-## Advanced Terraform Patterns
+## Advanced Terraform Patterns — Workspaces & Testing
 
 After you know the basics of Terraform, the patterns that separate junior IaC from production-grade IaC become the focus. These are the patterns that enable large organisations to manage complex cloud infrastructure at scale.
 
@@ -3453,6 +3433,33 @@ Policy:
 - [Production Kubernetes](https://www.oreilly.com/library/view/production-kubernetes/9781492092599/) — Advanced Kubernetes patterns for operating at scale.
 - [Cloud FinOps](https://www.oreilly.com/library/view/cloud-finops/9781492054610/) — Practical guide to cloud financial management.
 - [Designing Distributed Systems](https://www.oreilly.com/library/view/designing-distributed-systems/9781491983638/) — Patterns and paradigms for scalable, reliable systems by Brendan Burns (Kubernetes co-creator).
+
+[↑ Back to TOC](#table-of-contents)
+
+---
+
+## Congratulations!
+
+You have completed the **DevOps Career Path** course. You now have the knowledge and practical skills to:
+
+- Build and operate production Linux infrastructure
+- Write automation scripts and manage configuration with Ansible
+- Deploy containerized applications with Docker and Podman on Kubernetes
+- Provision cloud infrastructure with Terraform and OpenTofu
+- Build CI/CD pipelines with GitHub Actions, GitLab CI, and Jenkins
+- Monitor systems with Prometheus, Grafana, and Zabbix
+- Centralize logs with the ELK Stack and Loki
+- Secure infrastructure with DevSecOps practices, Vault, and OPA
+- Design HA systems and execute disaster recovery
+- Implement GitOps with ArgoCD and Flux
+- Manage service-to-service security with Istio or Linkerd
+
+**Next steps:**
+1. Complete the capstone project
+2. Pursue the CKA certification
+3. Build something real — the best way to learn is to deploy
+4. Contribute to open-source DevOps tooling
+5. Share your knowledge with others
 
 [↑ Back to TOC](#table-of-contents)
 

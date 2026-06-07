@@ -31,6 +31,42 @@
 - [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
+- [Linux Namespaces & the Container Foundation](#linux-namespaces--the-container-foundation)
+- [cgroups v2 Deep Dive](#cgroups-v2-deep-dive)
+- [strace Debugging Walkthrough](#strace-debugging-walkthrough)
+- [/proc Filesystem Anatomy](#proc-filesystem-anatomy)
+- [Linux Capabilities](#linux-capabilities)
+- [SELinux Practical Configuration](#selinux-practical-configuration)
+- [PAM — Pluggable Authentication Modules](#pam--pluggable-authentication-modules)
+- [inotify & File Watching](#inotify--file-watching)
+- [logrotate Deep Dive](#logrotate-deep-dive)
+- [firewalld (RHEL/Rocky/CentOS)](#firewalld-rhelrockycentos)
+- [bpftrace One-Liners](#bpftrace-one-liners)
+- [Common Mistakes & Pitfalls](#common-mistakes--pitfalls)
+- [Interview Prep](#interview-prep)
+- [A Day in the Life](#a-day-in-the-life)
+- [AppArmor Profiles](#apparmor-profiles)
+- [NFS and Shared Storage](#nfs-and-shared-storage)
+- [LUKS Disk Encryption](#luks-disk-encryption)
+- [systemd-nspawn: Lightweight Linux Containers](#systemd-nspawn-lightweight-linux-containers)
+- [Linux Performance Analysis Workflow](#linux-performance-analysis-workflow)
+- [Kernel Parameters and sysctl Tuning](#kernel-parameters-and-sysctl-tuning)
+- [Systemd Deep Dive](#systemd-deep-dive)
+- [Linux Containers from Scratch](#linux-containers-from-scratch)
+- [Linux Filesystem Internals](#linux-filesystem-internals)
+- [Shell Environment and Dotfile Management](#shell-environment-and-dotfile-management)
+- [Production Hardening Checklist](#production-hardening-checklist)
+- [Linux Networking Stack Deep Dive](#linux-networking-stack-deep-dive)
+- [Advanced User and Group Management](#advanced-user-and-group-management)
+- [Boot Process and Kernel Parameters](#boot-process-and-kernel-parameters)
+- [Advanced Process Management](#advanced-process-management)
+- [Filesystem Internals and Disk Tools](#filesystem-internals-and-disk-tools)
+- [Cron vs systemd Timers: Choosing the Right Tool](#cron-vs-systemd-timers-choosing-the-right-tool)
+- [Key Tools Summary Table](#key-tools-summary-table)
+- [Real-World War Story: The Inode Exhaustion Incident](#real-world-war-story-the-inode-exhaustion-incident)
+- [Kernel Module Management](#kernel-module-management)
+- [Time Synchronisation](#time-synchronisation)
+- [Practical Regex for DevOps](#practical-regex-for-devops)
 
 ---
 
@@ -4040,84 +4076,6 @@ nsenter -t $PID --net ss -tnp
 
 # Enter all namespaces (works even when the container has no shell)
 nsenter -t $PID --mount --uts --ipc --net --pid -- /bin/bash
-```
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Shell Environment and Dotfile Management
-
-### Shell Initialization Order
-
-```
-bash login shell:
-  /etc/profile → /etc/profile.d/*.sh
-  ~/.bash_profile → sources ~/.bashrc
-
-bash non-login interactive shell:
-  /etc/bash.bashrc → ~/.bashrc
-
-bash non-interactive shell (scripts, cron):
-  $BASH_ENV only — .bashrc is NOT sourced
-```
-
-This explains why PATH changes in `~/.bashrc` work in your terminal but not in cron — cron runs non-interactive shells.
-
-### Dotfile Repository Pattern
-
-```bash
-# Bare git repo to track your home directory
-git init --bare $HOME/.dotfiles
-alias config='git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
-config config --local status.showUntrackedFiles no
-
-config add .bashrc .vimrc .gitconfig
-config commit -m "Initial dotfiles"
-config remote add origin git@github.com:yourname/dotfiles.git
-config push -u origin main
-
-# Bootstrap on a new machine
-git clone --bare git@github.com:yourname/dotfiles.git $HOME/.dotfiles
-alias config='git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
-config checkout
-```
-
-### Useful Shell Functions for DevOps
-
-```bash
-# kubectl context switcher
-kctx() {
-  [ -z "$1" ] && kubectl config get-contexts || kubectl config use-context "$1"
-}
-
-# Quick port check
-portcheck() {
-  timeout 2 bash -c ">/dev/tcp/${1:-localhost}/$2" 2>/dev/null \
-    && echo "open" || echo "closed"
-}
-
-# Find which process owns a port
-whosport() { ss -tlnp "sport = :$1"; }
-
-# cd and list
-cl() { cd "$1" && ls -lh; }
-
-# Create directory and enter it
-mkcd() { mkdir -p "$1" && cd "$1"; }
-
-# Extract any archive
-extract() {
-  case "$1" in
-    *.tar.gz|*.tgz) tar xzf "$1" ;;
-    *.tar.bz2)      tar xjf "$1" ;;
-    *.tar.xz)       tar xJf "$1" ;;
-    *.zip)          unzip "$1" ;;
-    *.gz)           gunzip "$1" ;;
-    *.xz)           xz -d "$1" ;;
-    *)              echo "Unknown format: $1" ;;
-  esac
-}
 ```
 
 [↑ Back to TOC](#table-of-contents)

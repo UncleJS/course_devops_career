@@ -118,7 +118,7 @@ PHASE 7 — ADVANCED (Module 15)
 
 | Category | Tools |
 |---|---|
-| **OS / Shell** | Linux, Bash, Zsh |
+| **OS / Shell** | Linux, Bash |
 | **Scripting** | Bash, Python |
 | **Version Control** | Git, GitHub, GitLab |
 | **Containers** | Docker, Podman, Docker Compose, Podman Compose |
@@ -129,7 +129,7 @@ PHASE 7 — ADVANCED (Module 15)
 | **CI/CD** | GitHub Actions, GitLab CI/CD, Jenkins |
 | **Monitoring** | Prometheus, Grafana, Zabbix |
 | **Logging** | Elasticsearch, Logstash, Kibana (ELK), Loki, Promtail |
-| **Security** | HashiCorp Vault, Trivy, OPA/Gatekeeper, Snyk |
+| **Security** | HashiCorp Vault, Trivy, OPA/Gatekeeper |
 | **GitOps** | ArgoCD, Flux |
 | **Service Mesh** | Istio, Linkerd |
 | **Networking** | Nginx, HAProxy |
@@ -140,18 +140,15 @@ PHASE 7 — ADVANCED (Module 15)
 
 ## Certifications Alignment
 
-This course prepares you for the following industry certifications:
+This course is a concept foundation for the exams below. It does not replace the official exam objectives, timed practice, or a test environment. It does not cover AWS Certified DevOps Engineer, a GitLab CI certification, or Certified DevSecOps Professional.
 
-| Certification | Relevant Modules |
-|---|---|
-| **Linux Foundation — LFCS** (Linux Foundation Certified Sysadmin) | 01, 02 |
-| **HashiCorp Certified: Terraform Associate** | 08 |
-| **CKA** (Certified Kubernetes Administrator) | 06 |
-| **CKAD** (Certified Kubernetes Application Developer) | 05, 06 |
-| **AWS Certified Cloud Practitioner** | 07 |
-| **AWS Certified DevOps Engineer** | 07, 08, 09, 10, 11 |
-| **GitLab Certified CI/CD Associate** | 10 |
-| **Certified DevSecOps Professional (CDP)** | 13 |
+| Certification | What this course covers | Modules |
+|---|---|---|
+| **LFCS** (Linux Foundation Certified Sysadmin) | Linux, scripting, and networking foundations | 01, 02, 03 |
+| **HashiCorp Certified: Terraform Associate** | HCL, state, modules, and the Terraform workflow | 08 |
+| **CKA** (Certified Kubernetes Administrator) | Cluster objects and operations concepts, not an exam drill | 06 |
+| **CKAD** (Certified Kubernetes Application Developer) | Containers plus application workloads on Kubernetes, not an exam drill | 05, 06 |
+| **AWS Certified Cloud Practitioner** | Cloud vocabulary, shared responsibility, and core AWS services | 07 |
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -161,18 +158,21 @@ This course prepares you for the following industry certifications:
 
 1. **Work through modules in order** — each module builds on the previous
 2. **Don't skip the labs** — hands-on practice is how the concepts stick
-3. **Set up a lab environment** — a Linux VM or WSL2 on Windows is sufficient for most modules
+3. **Set up a lab environment** — use Ubuntu 24.04 for modules 1–5. Add a local Kubernetes cluster from module 6 onward
 4. **Use the glossary** — if you encounter an unfamiliar term, check [glossary.md](./glossary.md)
 5. **Revisit modules** — it's normal to return to earlier modules as later ones reference them
 
 ### Recommended Lab Environment
 
-| Option | Details |
-|---|---|
-| **Local VM** | Ubuntu 24.04 LTS or Rocky Linux 9 in VirtualBox/VMware |
-| **WSL2** | Windows Subsystem for Linux 2 with Ubuntu |
-| **Cloud VM** | Free tier EC2 (AWS), VM (Azure), or Compute Engine (GCP) |
-| **Local container** | `docker run -it ubuntu:24.04 bash` or `podman run -it ubuntu:24.04 bash` |
+| Option | Use it for | Details |
+|---|---|---|
+| **Ubuntu 24.04 VM** | Modules 1–15 | Default lab. VirtualBox, VMware, or a cloud VM with 2 CPU and 4 GB RAM. Give it 4 CPU and 8 GB RAM from module 6. |
+| **WSL2** | Modules 1–15 on Windows | Ubuntu 24.04. systemd is available in current WSL2. |
+| **Rocky Linux 9** | Comparison only | Use when a module shows a RHEL-family command (`dnf`, `wheel`). Not the default path. |
+| **kind or minikube** | Modules 6, 13, 14, and 15 | Local Kubernetes. About 4 CPU and 8 GB RAM. |
+| **Ubuntu container** | Early shell practice only | `docker run -it ubuntu:24.04 bash` has no systemd and is missing most lab packages. It is not enough for firewalls, services, or Kubernetes. |
+
+Cloud labs in modules 7 and 8 need an AWS, Azure, or GCP account. Each of those labs includes a teardown. Do not leave billable resources running.
 
 [↑ Back to TOC](#table-of-contents)
 

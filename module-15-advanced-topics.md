@@ -1,10 +1,15 @@
 # Module 15: Advanced Topics & Capstone
 
 > **Course**: DevOps Career Path  
-> **Audience**: Intermediate → Advanced  
-> **Prerequisites**: All previous modules (01–14)
+> **Audience**: Intermediate → Advanced
 
-[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 15 of 15](https://img.shields.io/badge/module-15%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Advanced-red) ![ArgoCD v2.13+](https://img.shields.io/badge/ArgoCD-v2.13%2B-EF7B4D?logo=argo&logoColor=white) ![Istio 1.24+](https://img.shields.io/badge/Istio-1.24%2B-466BB0?logo=istio&logoColor=white) ![Chaos Mesh 2.7+](https://img.shields.io/badge/Chaos%20Mesh-2.7%2B-red) ![GitOps · Service Mesh · Chaos](https://img.shields.io/badge/topics-GitOps%20%C2%B7%20Service%20Mesh%20%C2%B7%20Chaos-blueviolet)
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 15 of 15](https://img.shields.io/badge/module-15%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Advanced-red) ![ArgoCD v3.1+](https://img.shields.io/badge/ArgoCD-v3.1%2B-EF7B4D?logo=argo&logoColor=white) ![Istio 1.24+](https://img.shields.io/badge/Istio-1.24%2B-466BB0?logo=istio&logoColor=white) ![Chaos Mesh 2.7+](https://img.shields.io/badge/Chaos%20Mesh-2.7%2B-red) ![GitOps · Service Mesh · Chaos](https://img.shields.io/badge/topics-GitOps%20%C2%B7%20Service%20Mesh%20%C2%B7%20Chaos-blueviolet)
+
+**Prerequisites:** Modules 04 (Git), 05 (Containers), 06 (Kubernetes), and 10 (CI/CD).
+
+**Time:** About 12 hours, including the labs and the capstone starter.
+
+**Lab:** A local Kubernetes cluster (Minikube or kind), `argocd` and `istioctl` CLIs, and a GitHub repository for the capstone workflow.
 
 ---
 
@@ -14,32 +19,12 @@
 - [Learning Objectives](#learning-objectives)
 - [GitOps](#gitops)
 - [Service Mesh](#service-mesh)
-- [Kubernetes Operators & CRDs](#kubernetes-operators--crds)
 - [Advanced Terraform Patterns](#advanced-terraform-patterns)
 - [Platform Engineering](#platform-engineering)
-- [FinOps — Cloud Cost Management](#finops--cloud-cost-management)
-- [AI & LLMs in DevOps](#ai--llms-in-devops)
 - [Advanced: Chaos Engineering](#advanced-chaos-engineering)
 - [Capstone Project](#capstone-project)
-- [Career Paths & Certification Roadmap](#career-paths--certification-roadmap)
-- [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
-- [Internal Developer Platform (IDP) Design](#internal-developer-platform-idp-design)
-- [eBPF in Production](#ebpf-in-production)
-- [Platform Engineering Maturity](#platform-engineering-maturity)
-- [AI/ML Infrastructure for DevOps Engineers](#aiml-infrastructure-for-devops-engineers)
-- [The DevOps Career Roadmap](#the-devops-career-roadmap)
-- [Cost-Aware Platform Engineering](#cost-aware-platform-engineering)
-- [Common Mistakes & Pitfalls](#common-mistakes--pitfalls)
-- [Interview Prep](#interview-prep)
-- [A Day in the Life](#a-day-in-the-life)
-- [Advanced Terraform Patterns — Workspaces & Testing](#advanced-terraform-patterns--workspaces--testing)
-- [Service Mesh Advanced Operations](#service-mesh-advanced-operations)
-- [Advanced CI/CD Patterns](#advanced-cicd-patterns)
-- [SRE Practice: Advanced Topics](#sre-practice-advanced-topics)
-- [Further Reading (Supplemental)](#further-reading-supplemental)
-- [Congratulations!](#congratulations)
 
 ---
 
@@ -77,7 +62,7 @@ GitOps is an operational model where the **entire desired system state is stored
 
 The pull model is the defining safety property of GitOps. In a traditional push-based pipeline, the CI system needs cluster credentials to deploy — it connects to the cluster and applies changes. This means every CI job is a potential lateral movement path if a runner is compromised, and every secret rotation requires updating CI configuration. In a GitOps pull model, the cluster's own agent (ArgoCD or Flux) reaches out to Git and applies changes from inside the cluster network. The cluster credentials never leave the cluster. A compromised CI runner cannot deploy to production by itself; it can only propose a change by updating Git, which still requires a merge review.
 
-Drift detection and auto-correction are what separate GitOps from simply using Git as a deployment trigger. A GitOps agent continuously compares the desired state in Git against the actual state in the cluster. When they diverge — whether because a developer edited something directly with `kubectl`, an autoscaler changed a replica count, or a canary deployment left behind resources — the agent detects the drift and can automatically correct it. This property ensures that Git remains the genuine source of truth rather than becoming one artifact among many that partially describes the system.
+Drift detection and auto-correction are what separate GitOps from simply using Git as a deployment trigger. A GitOps agent continuously compares the desired state in Git against the actual state in the cluster. When they diverge because someone edited the cluster with `kubectl`, or because a sync left extra resources behind, the agent can correct that drift. If a HorizontalPodAutoscaler owns the replica count, self-heal must ignore `/spec/replicas`. Reverting an autoscaler's replica change fights the HPA. This property ensures that Git remains the genuine source of truth rather than becoming one artifact among many that partially describes the system.
 
 The App-of-Apps pattern solves the bootstrapping problem for large GitOps deployments. Instead of registering every application individually in ArgoCD, you create a single "root" Application that points to a directory containing ArgoCD Application manifests. When ArgoCD syncs the root App, it discovers and creates all the child Applications, which in turn sync their workloads. This means the entire cluster's application portfolio can be bootstrapped from a single `kubectl apply`, and new applications are added to the cluster simply by committing an Application manifest to Git.
 
@@ -116,24 +101,6 @@ flowchart LR
     CFG -->|"pull desired state"| AGENT
     AGENT -->|"reconcile to desired state"| CLUSTER
     CLUSTER -->|"drift detected"| AGENT
-```
-
-| Principle | Description |
-|-----------|-------------|
-| **Declarative** | System state described declaratively (YAML, Terraform HCL) |
-| **Versioned and immutable** | Git is the single source of truth; history is immutable |
-| **Pulled automatically** | Software agents pull state from Git, not pushed from pipelines |
-| **Continuously reconciled** | Agents detect and correct drift from desired state |
-
-### GitOps vs traditional CI/CD
-
-```
-Traditional (Push):              GitOps (Pull):
-CI pipeline builds image    →    CI pipeline builds image
-CI pipeline deploys to cluster   CI pipeline pushes to Git repo
-(cluster credentials in CI)      Argo/Flux polls Git
-                                 Argo/Flux applies changes to cluster
-                                 (no cluster creds in CI!)
 ```
 
 ### Repository structure patterns
@@ -211,7 +178,7 @@ flowchart TD
 kubectl create namespace argocd
 
 kubectl apply -n argocd \
-  -f https://raw.githubusercontent.com/argoproj/argo-cd/v2.11.0/manifests/install.yaml
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.1.0/manifests/install.yaml
 
 # Wait for pods to be ready
 kubectl -n argocd wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server --timeout=120s
@@ -249,13 +216,19 @@ spec:
     server: https://kubernetes.default.svc
     namespace: production
 
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
   syncPolicy:
     automated:
       prune: true      # Delete resources removed from Git
-      selfHeal: true   # Revert manual changes to cluster
+      selfHeal: true   # Revert manual kubectl edits, not HPA replica changes
       allowEmpty: false
     syncOptions:
       - CreateNamespace=true
+      - RespectIgnoreDifferences=true
       - PrunePropagationPolicy=foreground
       - ApplyOutOfSyncOnly=true
     retry:
@@ -420,7 +393,7 @@ spec:
 #### HelmRelease — deploy a Helm chart via Flux
 
 ```yaml
-apiVersion: helm.toolkit.fluxcd.io/v2beta2
+apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: kube-prometheus-stack
@@ -436,8 +409,7 @@ spec:
         name: prometheus-community
         namespace: flux-system
   values:
-    grafana:
-      adminPassword: changeme
+    # Do not commit an admin password. Create the Grafana admin Secret outside Git.
     prometheus:
       prometheusSpec:
         retention: 30d
@@ -469,7 +441,7 @@ In practice, many teams choose based on organisational context rather than pure 
 | **Helm support** | Native | HelmRelease CRD |
 | **Kustomize** | Native | Native |
 | **ApplicationSet** | Yes | GitRepository + path generation |
-| **OIDC/SSO** | Built-in | Via Dex sidecar |
+| **OIDC/SSO** | Built-in, with Dex as Argo CD's identity broker | OIDC provider on the Flux controllers. Dex is not Flux's SSO. |
 | **CNCF graduated** | Yes | Yes |
 | **Best for** | Teams wanting a web UI | Operators/programmers, composability |
 
@@ -525,9 +497,7 @@ Istio is the most feature-rich service mesh, using Envoy proxies as sidecars.
 ```mermaid
 flowchart TD
     subgraph "Control Plane"
-        ISTIOD["istiod<br/>(Pilot + Citadel + Galley)"]
-        PILOT["Pilot<br/>(xDS config distribution)"]
-        CITADEL["Citadel<br/>(certificate authority, mTLS)"]
+        ISTIOD["istiod<br/>(discovery, certificates, config)"]
     end
 
     subgraph "Data Plane"
@@ -540,12 +510,8 @@ flowchart TD
     PROM["Prometheus<br/>(metrics)"]
     JAE["Jaeger / Tempo<br/>(traces)"]
 
-    ISTIOD --> PILOT
-    ISTIOD --> CITADEL
-    PILOT -->|"xDS: routes, clusters, endpoints"| EA
-    PILOT -->|"xDS: routes, clusters, endpoints"| EB
-    CITADEL -->|"issue mTLS certificates"| EA
-    CITADEL -->|"issue mTLS certificates"| EB
+    ISTIOD -->|"xDS and mTLS certificates"| EA
+    ISTIOD -->|"xDS and mTLS certificates"| EB
     SA <--> EA
     EA -->|"mTLS"| EB
     EB <--> SB
@@ -556,9 +522,10 @@ flowchart TD
 #### Install Istio
 
 ```bash
-# Download istioctl
-curl -L https://istio.io/downloadIstio | ISTIO_VERSION=1.21.0 sh -
-export PATH=$PWD/istio-1.21.0/bin:$PATH
+# Current stable. The script prints the directory it created. Do not pin a retired release.
+curl -L https://istio.io/downloadIstio | sh -
+cd "$(ls -d istio-* | head -1)"
+export PATH="$PWD/bin:$PATH"
 
 # Install with default profile
 istioctl install --set profile=default -y
@@ -712,7 +679,7 @@ spec:
 
 ```bash
 # Install Kiali dashboard (service mesh observability UI)
-kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.21/samples/addons/kiali.yaml
+kubectl apply -f samples/addons/kiali.yaml
 kubectl port-forward svc/kiali -n istio-system 20001:20001
 
 # Check mTLS status
@@ -739,7 +706,7 @@ Linkerd is a lightweight, CNCF-graduated service mesh focused on simplicity and 
 ```bash
 # Install CLI
 curl --proto '=https' --tlsv1.2 -sSfL https://run.linkerd.io/install | sh
-export PATH=$PATH:/home/user/.linkerd2/bin
+# Run the export PATH line the installer prints. Do not hardcode a home directory.
 
 # Pre-flight check
 linkerd check --pre
@@ -763,22 +730,29 @@ linkerd viz check
 linkerd viz dashboard &
 ```
 
-#### Traffic policy in Linkerd (SMI / HTTPRoute)
+#### Traffic split with Gateway API HTTPRoute
 
 ```yaml
-# Traffic split — 90/10 canary
-apiVersion: split.smi-spec.io/v1alpha1
-kind: TrafficSplit
+# 90/10 canary. Linkerd reads this HTTPRoute. It does not use SMI TrafficSplit.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
 metadata:
   name: my-api-canary
-  namespace: production
+  namespace: lab
 spec:
-  service: my-api
-  backends:
-    - service: my-api-stable
-      weight: 900m
-    - service: my-api-canary
-      weight: 100m
+  parentRefs:
+    - name: my-api
+      kind: Service
+      group: core
+      port: 80
+  rules:
+    - backendRefs:
+        - name: my-api-stable
+          port: 80
+          weight: 90
+        - name: my-api-canary
+          port: 80
+          weight: 10
 ```
 
 ```bash
@@ -807,7 +781,7 @@ linkerd viz tap deploy/my-api -n production
 | **Memory overhead** | ~50MB per sidecar | ~10MB per sidecar |
 | **CPU overhead** | Higher | Lower (~10x less) |
 | **Learning curve** | Steep (many CRDs) | Gentle |
-| **Traffic management** | Very rich (VirtualService, DR) | Basic (SMI, HTTPRoute) |
+| **Traffic management** | Very rich (VirtualService, DR) | HTTPRoute (Gateway API) |
 | **mTLS** | Yes | Yes (default on) |
 | **CNCF status** | Graduated | Graduated |
 | **Best for** | Complex traffic policies, multi-cluster | Simplicity, resource-constrained, observability |
@@ -1587,9 +1561,9 @@ jobs:
 
 ### Project: Production-Grade Microservices Platform
 
-This capstone project integrates every concept from the 15-module course into a single deployable platform. The purpose is not just to produce a working deployment but to internalise the connections between the disciplines: how version control practices from Module 01 feed into CI/CD from Module 03, how container skills from Module 05 underpin Kubernetes from Module 06, and how security from Module 13 must be woven into every earlier decision rather than bolted on at the end.
+This capstone project integrates every concept from the 15-module course into a single deployable platform. The purpose is not just to produce a working deployment but to internalise the connections between the disciplines: how version control from Module 04 feeds into CI/CD from Module 10, how container skills from Module 05 underpin Kubernetes from Module 06, and how security from Module 13 must be woven into every earlier decision rather than bolted on at the end.
 
-The GitOps layer (Module 15) is the thread that stitches everything together. Infrastructure declared as Terraform (Module 08) is committed to Git. Kubernetes manifests managed by Ansible (Module 09) are committed to a config repository. ArgoCD watches that config repository and ensures the cluster always reflects what is in Git. CI/CD pipelines (Module 03) are triggered by application code changes, run security scans (Module 13), build container images (Module 05), push them to a registry, and update the image tag in the config repository — which ArgoCD then reconciles. Every step is auditable, reversible, and automated.
+The GitOps layer (Module 15) is the thread that stitches everything together. Infrastructure declared as Terraform (Module 08) is committed to Git. Kubernetes manifests are committed to a config repository. ArgoCD watches that config repository and ensures the cluster always reflects what is in Git. CI/CD pipelines (Module 10) are triggered by application code changes, run security scans (Module 13), build container images (Module 05), push them to a registry, and update the image tag in the config repository — which ArgoCD then reconciles. Every step is auditable, reversible, and automated.
 
 Monitoring and observability (Modules 11 and 12) provide the feedback loop that makes this platform trustworthy. Prometheus collects metrics from all services, Loki collects structured logs, and Grafana provides dashboards and alerting. SLOs define what "working" means for each service. Chaos engineering (Module 14, Module 15) validates that the HA architecture actually survives the failures it was designed to survive. Vault (Module 13) manages credentials dynamically so no long-lived secret ever sits in a Kubernetes Secret or CI variable in plaintext. All of these capabilities exist not as separate tools but as a unified system where the outputs of each layer are consumed by the next.
 
@@ -1658,7 +1632,9 @@ flowchart LR
 
 ### Project components
 
-#### Component 1: Application (Module 01–04 skills)
+The lab at the end of this module is the required work: a small API, a Dockerfile, Kubernetes manifests, a GitHub Actions workflow that runs Trivy, an Argo CD sync, and `kubectl port-forward`. The sketches in this section are orientation. This capstone does not include starters for Vault dynamic database credentials, Gatekeeper, Falco, Loki, a tested restore, or Infracost.
+
+#### Component 1: Application (Git is Module 04)
 
 ```
 3-tier application:
@@ -1795,38 +1771,25 @@ k8s/
 
 ### Acceptance criteria
 
+The lab builds a local path only: a small API, a Dockerfile, Kubernetes manifests, a GitHub Actions workflow that runs Trivy, an Argo CD sync, and `kubectl port-forward`.
+
 ```
-✅ Application accessible at https://capstone.example.com
-✅ All CI/CD stages pass (test, scan, build, sign, push)
-✅ ArgoCD shows all apps Healthy + Synced
-✅ Istio mTLS enforced (verify with: istioctl x authz check)
-✅ Vault serving dynamic DB credentials (not static secrets in K8s)
-✅ Grafana dashboard showing API golden signals with live data
-✅ Loki showing structured JSON logs from API
-✅ Alertmanager → Slack notification when error rate is elevated
-✅ Gatekeeper blocks deployment of root container
-✅ NetworkPolicy blocks frontend→database direct traffic
-✅ Daily database backup runs successfully
-✅ Backup restore tested and documented in runbook
-✅ Trivy image scan: zero CRITICAL vulnerabilities
-✅ DR runbook complete with step-by-step failover procedure
-✅ Estimated monthly cost documented (Infracost output)
+✅ git push runs GitHub Actions
+✅ The workflow runs Trivy on the image
+✅ Argo CD shows the app Synced
+✅ kubectl port-forward reaches the API
 ```
 
 ### Project deliverables
 
 ```
 github.com/yourname/devops-capstone/
-├── README.md              ← Architecture diagram, setup instructions
-├── app/                   ← Application source code
-├── docker/                ← Dockerfile(s)
-├── k8s/                   ← Kubernetes manifests (base + overlays)
-├── terraform/             ← Infrastructure as Code
-├── .github/workflows/     ← CI/CD pipelines
-├── monitoring/            ← Grafana dashboards, alerting rules
-├── security/              ← Vault policies, Gatekeeper templates
-├── runbooks/              ← DR runbook, incident runbooks
-└── docs/                  ← Architecture decisions, cost analysis
+├── app/api.py
+├── Dockerfile
+├── k8s/deployment.yaml
+├── k8s/service.yaml
+├── argocd/application.yaml
+└── .github/workflows/ci.yml
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1878,11 +1841,13 @@ DevOps Engineer
 ### Recommended learning path
 
 ```
-Month 1-3:  Linux (Module 01-03) + CKA study
-Month 3-6:  Docker/K8s (Module 05-06) + CKA exam
-Month 6-9:  Cloud + IaC (Module 07-08) + Terraform Associate
-Month 9-12: CI/CD + Monitoring (Module 10-11) + AWS DevOps Engineer
-Month 12+:  Security + Capstone + CKS
+Month 1-3:  Linux, scripting, and networking (Modules 01-03)
+Month 3-6:  Containers and Kubernetes (Modules 05-06)
+            Optional CKA exam practice only after Module 06.
+            This course does not promise you will pass the exam.
+Month 6-9:  Cloud and IaC (Modules 07-08)
+Month 9-12: CI/CD, monitoring, and logging (Modules 10-12)
+Month 12+:  Security, HA, and the capstone (Modules 13-15)
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1956,14 +1921,15 @@ linkerd viz edges deployment -n production
 # Install ArgoCD on Minikube
 minikube start --cpus=4 --memory=8192
 kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v2.11.0/manifests/install.yaml
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.1.0/manifests/install.yaml
 
 # Get the initial password
 kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath="{.data.password}" | base64 -d
 
-# Port forward the UI
-kubectl port-forward svc/argocd-server -n argocd 8080:443
+# Port-forward, then log in before any argocd app command
+kubectl port-forward svc/argocd-server -n argocd 8080:443 &
+argocd login localhost:8080 --username admin --password "$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)" --insecure
 
 # Create an Application pointing to the ArgoCD example repo
 argocd app create guestbook \
@@ -1978,6 +1944,10 @@ argocd app create guestbook \
 kubectl delete deployment guestbook-ui
 # Within 3 minutes, ArgoCD restores it
 ```
+
+**Expected:** `argocd app get guestbook` shows Synced and Healthy, and the guestbook Deployment returns after you delete it. This lab does not use an HPA, so self-heal restoring a deleted Deployment is the right check. Do not expect self-heal to undo a replica change made by an autoscaler.
+
+**Cleanup:** `argocd app delete guestbook --yes` and `kubectl delete namespace argocd`. Stop the port-forward. `minikube stop` if you are done with the cluster.
 
 ---
 
@@ -2035,44 +2005,194 @@ spec:
           args: ["-text=Hello from v2"]
 EOF
 
-# Apply DestinationRule and VirtualService (90/10 split)
-# Use examples from this module
+# Service, DestinationRule, and VirtualService. The host you curl is the VirtualService host.
+kubectl apply -f - << 'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: hello
+spec:
+  selector:
+    app: hello
+  ports:
+    - name: http
+      port: 5678
+      targetPort: 5678
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: hello
+spec:
+  host: hello
+  subsets:
+    - name: v1
+      labels:
+        version: v1
+    - name: v2
+      labels:
+        version: v2
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: hello
+spec:
+  hosts:
+    - hello
+  http:
+    - route:
+        - destination:
+            host: hello
+            subset: v1
+          weight: 90
+        - destination:
+            host: hello
+            subset: v2
+          weight: 10
+EOF
 
-# Test traffic distribution
-for i in $(seq 1 20); do
-  curl -s http://hello-svc/ 
-done | sort | uniq -c
-# Should show approximately 18x v1, 2x v2
+# Curl the Service name the VirtualService routes: hello
+kubectl run curl-lab --image=curlimages/curl:8.11.1 --restart=Never --rm -it --command -- \
+  sh -c 'for i in $(seq 1 20); do curl -s http://hello:5678; echo; done' | sort | uniq -c
 ```
+
+**Expected:** about 18 lines of "Hello from v1" and about 2 of "Hello from v2".
+
+**Cleanup:** `kubectl delete virtualservice,destinationrule,svc hello` and `kubectl delete deploy hello-v1 hello-v2`. `istioctl uninstall --purge -y` if you want Istio removed.
 
 ---
 
 ### Lab 3 — Capstone Project Starter (Advanced)
 
-**Goal**: Begin the capstone project — scaffold the repo structure, CI pipeline, and GitOps setup.
+**Goal**: Build the local path in the acceptance criteria: a small API, a Dockerfile, Kubernetes manifests, a GitHub Actions workflow that runs Trivy, an Argo CD sync, and a port-forward.
+
+```python
+# app/api.py
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b"ok\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+if __name__ == "__main__":
+    HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+```
+
+```dockerfile
+# Dockerfile
+FROM python:3.12-slim
+RUN useradd --uid 1001 --create-home app
+USER 1001
+WORKDIR /home/app
+COPY app/api.py .
+EXPOSE 8080
+CMD ["python", "api.py"]
+```
+
+```yaml
+# k8s/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: capstone-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: capstone-api
+  template:
+    metadata:
+      labels:
+        app: capstone-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/YOUR_GITHUB_USER/capstone-api:latest
+          ports:
+            - containerPort: 8080
+---
+# k8s/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: capstone-api
+spec:
+  selector:
+    app: capstone-api
+  ports:
+    - port: 8080
+      targetPort: 8080
+```
+
+```yaml
+# .github/workflows/ci.yml
+name: ci
+on:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/capstone-api:latest
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/${{ github.repository_owner }}/capstone-api:latest
+          exit-code: "1"
+          severity: CRITICAL
+```
+
+Install Argo CD 3.1.0 with the Lab 1 commands, including `argocd login`, then:
 
 ```bash
-# 1. Create the repository
-mkdir devops-capstone && cd devops-capstone
-git init
+kubectl apply -f - << 'EOF'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: capstone-api
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/YOUR_GITHUB_USER/devops-capstone.git
+    path: k8s
+    targetRevision: main
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+EOF
 
-# 2. Create the application structure
-mkdir -p app/{frontend,api} k8s/{base,overlays/{staging,production}} \
-          terraform monitoring security runbooks .github/workflows
-
-# 3. Create a minimal API (Python/Node)
-# 4. Write a secure Dockerfile
-# 5. Create Kubernetes base manifests
-# 6. Write GitHub Actions CI pipeline with Trivy scan
-# 7. Install ArgoCD on local cluster
-# 8. Create ArgoCD Application manifest
-# 9. Push code → watch pipeline → watch ArgoCD deploy
-
-# Success criteria:
-# git push → GitHub Actions builds + scans image → pushes to ghcr.io
-# ArgoCD detects new image → applies to cluster
-# App accessible at http://localhost via port-forward
+argocd app sync capstone-api
+kubectl port-forward svc/capstone-api 8080:8080
+curl -s http://127.0.0.1:8080
 ```
+
+**Expected:** the Actions run includes the Trivy step, `argocd app get capstone-api` shows Synced, and `curl` prints `ok`.
+
+**Cleanup:** stop the port-forward. `argocd app delete capstone-api --yes`. `kubectl delete -f k8s/` on the cluster.
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -2123,1346 +2243,3 @@ mkdir -p app/{frontend,api} k8s/{base,overlays/{staging,production}} \
 - [Accelerate (book — DevOps metrics)](https://itrevolution.com/accelerate-book/)
 
 [↑ Back to TOC](#table-of-contents)
-
----
-
-## Internal Developer Platform (IDP) Design
-
-Platform engineering has emerged as the discipline that sits between traditional DevOps and product engineering. Rather than individual teams each solving the same infrastructure problems, a platform team builds a "golden path" — a paved road that makes the right way to do things also the easy way. The Internal Developer Platform (IDP) is the tangible product that the platform team delivers.
-
-### What an IDP Is and Is Not
-
-```
-An IDP IS:
-  - A self-service portal where developers provision infrastructure, environments, and services
-  - A collection of golden path templates (service scaffolding, deployment pipelines, observability)
-  - An abstraction layer that hides infrastructure complexity from application developers
-  - A contract: developers follow the golden path, platform team owns reliability
-
-An IDP IS NOT:
-  - A single monolithic tool (it is usually 5–15 integrated tools)
-  - A replacement for cloud knowledge (developers should still understand what they are building on)
-  - Finished (it evolves continuously with developer feedback)
-  - Optional for scale-up organisations (after ~20 engineering teams, IDP ROI is clearly positive)
-```
-
-### Backstage as an IDP Foundation
-
-Spotify's Backstage is the most widely adopted open-source IDP framework. It provides a service catalogue, software templates, and a plugin ecosystem:
-
-```bash
-# Create a new Backstage app
-npx @backstage/create-app@latest
-
-# Project structure
-backstage/
-  packages/
-    app/         # Frontend React application
-    backend/     # Node.js backend
-  plugins/
-    catalog/     # Service catalogue
-    techdocs/    # Documentation
-    scaffolder/  # Golden path templates
-  app-config.yaml
-```
-
-A golden path template for a new microservice:
-
-```yaml
-# backstage/templates/nodejs-service/template.yaml
-apiVersion: scaffolder.backstage.io/v1beta3
-kind: Template
-metadata:
-  name: nodejs-microservice
-  title: Node.js Microservice
-  description: Creates a new Node.js microservice with CI/CD, observability, and Kubernetes deployment
-  tags:
-    - nodejs
-    - microservice
-    - kubernetes
-
-spec:
-  owner: platform-team
-  type: service
-
-  parameters:
-    - title: Service Details
-      required: [name, description, owner]
-      properties:
-        name:
-          title: Service Name
-          type: string
-          pattern: '^[a-z][a-z0-9-]*[a-z0-9]$'
-          description: Lowercase letters, numbers, and hyphens only
-        description:
-          title: Description
-          type: string
-        owner:
-          title: Owner Team
-          type: string
-          ui:field: OwnerPicker
-          ui:options:
-            allowedKinds: [Group]
-        tier:
-          title: Service Tier
-          type: string
-          enum: [tier1, tier2, tier3]
-          description: Tier 1 = revenue-critical, Tier 3 = internal tooling
-
-    - title: Infrastructure
-      properties:
-        minReplicas:
-          title: Minimum Replicas
-          type: integer
-          default: 2
-          minimum: 1
-          maximum: 10
-        enableDatabase:
-          title: PostgreSQL Database
-          type: boolean
-          default: false
-        enableCache:
-          title: Redis Cache
-          type: boolean
-          default: false
-
-  steps:
-    - id: fetch-template
-      name: Fetch Template
-      action: fetch:template
-      input:
-        url: ./skeleton
-        values:
-          name: ${{ parameters.name }}
-          owner: ${{ parameters.owner }}
-          tier: ${{ parameters.tier }}
-          minReplicas: ${{ parameters.minReplicas }}
-
-    - id: create-repo
-      name: Create Repository
-      action: publish:github
-      input:
-        repoUrl: github.com?repo=${{ parameters.name }}&owner=your-org
-        defaultBranch: main
-        repoVisibility: private
-        topics:
-          - service
-          - ${{ parameters.tier }}
-
-    - id: register-catalog
-      name: Register in Catalogue
-      action: catalog:register
-      input:
-        repoContentsUrl: ${{ steps.create-repo.output.repoContentsUrl }}
-        catalogInfoPath: /catalog-info.yaml
-```
-
-When a developer uses this template, they get within 2 minutes: a new GitHub repository pre-configured with CI/CD, a Kubernetes deployment manifest, an observability setup (Prometheus metrics, structured logging, readiness probe), and a Backstage catalogue entry. The "right way" to create a service is now faster than doing it manually — that is the goal.
-
-### Golden Path Principles
-
-```
-Principle 1: Paved roads, not guardrails
-  Make the golden path easier than any alternative. If developers work around your platform,
-  your platform has failed. Investigate why and fix the friction.
-
-Principle 2: Abstractions that do not leak
-  Developers should be able to use the platform without knowing Kubernetes YAML.
-  But when things go wrong, the abstraction should not hide the information they need to debug.
-
-Principle 3: Opinions backed by evidence
-  "We chose PostgreSQL as the default database" should be backed by reasoning.
-  Document the decision and the alternatives. Developers who understand the why
-  will make better decisions about when to deviate from the golden path.
-
-Principle 4: Measure platform adoption and developer satisfaction
-  Track: how many services use the golden path? What is developer NPS for the platform?
-  What percentage of production incidents involve services that deviated from the golden path?
-  These metrics justify platform investment to leadership.
-
-Principle 5: Treat developers as customers
-  Platform team's product is the IDP. Developers are the customers.
-  Run regular office hours. Have a platform support channel. Conduct quarterly NPS surveys.
-  Build a community of practice around the platform, not just a ticketing relationship.
-```
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## eBPF in Production
-
-eBPF (extended Berkeley Packet Filter) is a technology that allows running sandboxed programs in the Linux kernel without changing kernel source code or loading kernel modules. It has become one of the most significant infrastructure technologies of the past decade, enabling networking, observability, and security capabilities that were previously impossible or extremely costly.
-
-### What eBPF Enables
-
-```
-Networking:
-  - XDP (eXpress Data Path): packet processing at line rate before the kernel network stack
-  - Service mesh data plane (Cilium) with no sidecar proxies
-  - Load balancing at the kernel level (eBPF-based kube-proxy replacement)
-  - Network policies enforced in the kernel (lower overhead than iptables)
-
-Observability:
-  - CPU profiling with zero code changes (Parca, Pyroscope)
-  - Distributed tracing without application instrumentation (Tetragon, Hubble)
-  - Real-time kernel metrics (cache misses, context switches, TCP retransmits)
-  - File system I/O tracing at the syscall level
-
-Security:
-  - Syscall filtering (seccomp-bpf) at the application level
-  - Runtime threat detection (Tetragon, Falco eBPF probe)
-  - Network traffic inspection without routing through a proxy
-  - Immutable audit logs of all sensitive syscalls
-```
-
-### Cilium: eBPF-Based Kubernetes Networking
-
-Cilium replaces kube-proxy and provides eBPF-native networking with significant performance advantages:
-
-```yaml
-# Install Cilium with kube-proxy replacement
-helm install cilium cilium/cilium \
-  --namespace kube-system \
-  --set kubeProxyReplacement=strict \
-  --set k8sServiceHost=<API_SERVER_IP> \
-  --set k8sServicePort=6443 \
-  --set hubble.relay.enabled=true \
-  --set hubble.ui.enabled=true \
-  --set prometheus.enabled=true \
-  --set operator.prometheus.enabled=true
-```
-
-Cilium NetworkPolicy with Layer 7 (HTTP) enforcement — something iptables-based policies cannot do:
-
-```yaml
-apiVersion: cilium.io/v2
-kind: CiliumNetworkPolicy
-metadata:
-  name: payment-service-l7
-spec:
-  endpointSelector:
-    matchLabels:
-      app: payment-service
-  ingress:
-    - fromEndpoints:
-        - matchLabels:
-            app: checkout-service
-      toPorts:
-        - ports:
-            - port: "3000"
-              protocol: TCP
-          rules:
-            http:
-              - method: POST
-                path: /api/v1/payments
-              - method: GET
-                path: /api/v1/payments/[0-9]+
-    # All other HTTP methods/paths to payment-service are denied
-    # even from checkout-service
-```
-
-Hubble (Cilium's observability component) provides real-time visibility into service-to-service traffic:
-
-```bash
-# View traffic flows
-hubble observe --namespace production --follow
-
-# Service dependency map
-hubble observe --namespace production \
-  --type l7 \
-  --output json \
-  | jq '{from: .source.labels["k8s:app"], to: .destination.labels["k8s:app"], method: .l7.http.method}'
-
-# Identify services making unexpected cross-namespace calls
-hubble observe --all-namespaces \
-  --type drop \
-  --output json
-```
-
-### Continuous Profiling with Parca
-
-Continuous profiling collects CPU and memory profiles from production processes constantly, at negligible overhead (~1%), enabling you to understand what code is actually running and how expensive it is:
-
-```bash
-# Deploy Parca agent as a DaemonSet
-kubectl apply -f https://github.com/parca-dev/parca-agent/releases/latest/download/kubernetes-manifest.yaml
-
-# Parca agent uses eBPF to collect profiles without code changes
-# Profiles are available in the Parca UI showing:
-# - Which functions consume the most CPU across your entire fleet
-# - Memory allocation hotspots
-# - Goroutine/thread blocking analysis
-# - Differential profiles: what changed between version A and version B?
-```
-
-The practical value: a SaaS company deploying continuous profiling discovers that 22% of their payment service's CPU is consumed by JSON serialisation in a hot path. A one-line change (use a faster JSON library, or pre-serialise static responses) reduces CPU usage by 15%, allowing them to reduce the payment service's pod count from 12 to 10 — a direct cost saving discovered from production data, not benchmarks.
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Platform Engineering Maturity
-
-Platform engineering is not a team structure — it is a capability. Organisations progress through recognisable stages as they invest in platform capabilities:
-
-```
-Stage 1: Wild West
-  Every team maintains their own infrastructure, CI/CD, and deployment tooling.
-  Heroes do heroics; knowledge is tribal; on-boarding takes months.
-  Sign you are here: "only John knows how that works"
-
-Stage 2: Shared Tools, No Product Mindset
-  A central team provides shared tools (Jenkins, Artifactory, shared Kubernetes cluster).
-  But the tools are maintained reactively, documentation is sparse, and developers
-  must work around frustrating limitations.
-  Sign you are here: developers file tickets to the platform team for every environment change
-
-Stage 3: Platform as a Product
-  The platform team has a roadmap, conducts developer surveys, and measures adoption.
-  Self-service portals exist for common tasks (new service, database, environment).
-  Golden path templates reduce new service setup from weeks to hours.
-  Sign you are here: new engineers can ship their first change in under a day
-
-Stage 4: Internal Developer Platform
-  A complete IDP with service catalogue, software templates, docs portal.
-  Developer experience (DX) metrics are tracked: deployment frequency, on-boarding time.
-  Platform abstractions are stable enough that developers rarely need to touch raw Kubernetes.
-  Sign you are here: developers describe the platform as "delightful" (yes, this is the goal)
-
-Stage 5: Platform as Competitive Advantage
-  The platform is a moat: faster shipping, higher reliability, lower cognitive load.
-  Top engineers choose your company partly because of the quality of the platform.
-  Platform capabilities are reusable across business lines or open-sourced as community tools.
-  Sign you are here: your talks about your platform are standing-room-only at conferences
-```
-
-Getting from Stage 2 to Stage 3 is the most impactful investment most organisations can make. It requires: a dedicated platform team (not an ops team doing platform work on the side), a product manager or technical PM for the platform, and explicit developer experience metrics.
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## AI/ML Infrastructure for DevOps Engineers
-
-Machine learning workloads have unique infrastructure requirements that are becoming increasingly relevant to DevOps and platform teams as organisations integrate ML models into their products. You do not need to be a data scientist — you need to understand the infrastructure layer.
-
-### GPU Node Pools in Kubernetes
-
-ML training and inference require GPUs. Managing GPU nodes in Kubernetes:
-
-```yaml
-# Node pool with GPU nodes (GKE example)
-resource "google_container_node_pool" "gpu_pool" {
-  name       = "gpu-pool"
-  cluster    = google_container_cluster.primary.name
-  node_count = 0  # Starts at 0 — autoscales on demand
-
-  autoscaling {
-    min_node_count = 0
-    max_node_count = 10
-  }
-
-  node_config {
-    machine_type = "n1-standard-8"
-    guest_accelerator {
-      type  = "nvidia-tesla-t4"
-      count = 1
-    }
-    oauth_scopes = ["https://www.googleapis.com/auth/cloud-platform"]
-
-    taint {
-      key    = "nvidia.com/gpu"
-      value  = "present"
-      effect = "NO_SCHEDULE"
-    }
-  }
-}
-```
-
-```yaml
-# ML training job that tolerates the GPU taint
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: model-training-run-42
-spec:
-  template:
-    spec:
-      containers:
-        - name: trainer
-          image: your-org/ml-trainer:v1.2.0
-          resources:
-            limits:
-              nvidia.com/gpu: 1
-          env:
-            - name: TRAINING_DATA_GCS_PATH
-              value: gs://ml-datasets/training-v3
-            - name: MODEL_OUTPUT_GCS_PATH
-              value: gs://ml-models/run-42
-      tolerations:
-        - key: nvidia.com/gpu
-          operator: Exists
-          effect: NoSchedule
-      restartPolicy: OnFailure
-```
-
-### Model Serving with KServe
-
-KServe provides a standard Kubernetes interface for deploying ML models:
-
-```yaml
-apiVersion: serving.kserve.io/v1beta1
-kind: InferenceService
-metadata:
-  name: recommendation-model
-  namespace: ml-production
-spec:
-  predictor:
-    sklearn:
-      storageUri: gs://ml-models/recommendation-v2.3
-      resources:
-        requests:
-          cpu: "1"
-          memory: 2Gi
-        limits:
-          cpu: "2"
-          memory: 4Gi
-
-  # Canary deployment — route 10% of traffic to new model version
-  # before full rollout
-  canaryTrafficPercent: 10
-  canary:
-    predictor:
-      sklearn:
-        storageUri: gs://ml-models/recommendation-v2.4-candidate
-```
-
-The DevOps concerns for ML infrastructure are the same as any production service, with additional considerations: model versioning and rollback (models are large binary artefacts, not just code), data pipeline reliability (ML models depend on continuous data refresh), and GPU utilisation monitoring (GPUs are expensive; you need to know if they are sitting idle).
-
-### MLOps Maturity
-
-```
-Level 1 — Manual ML
-  Data scientists train models on laptops, copy files to S3 manually.
-  No reproducibility, no versioning, no monitoring.
-
-Level 2 — ML Pipelines
-  Training pipelines automated (Kubeflow, Vertex AI Pipelines, MLflow).
-  Model versioning with MLflow Tracking or equivalent.
-  Basic model monitoring (input drift detection).
-
-Level 3 — CI/CD for ML
-  Model training triggered by data changes or code changes (automated retraining).
-  Automated evaluation gates: model only deploys if accuracy > threshold.
-  A/B testing of model versions in production.
-  Feature store for consistent feature engineering across training and serving.
-
-Level 4 — Automated ML
-  Continuous training: models retrain automatically when drift is detected.
-  Shadow mode deployment: new model runs in parallel, predictions logged but not served.
-  Automated rollback: if model performance degrades, rollback to previous version.
-```
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## The DevOps Career Roadmap
-
-You have completed this course. The following roadmap contextualises where you are and where the path leads:
-
-### Junior DevOps Engineer (0–2 years)
-
-```
-Core skills developed in this course:
-  - Linux: comfortable in the CLI, scripting, process management
-  - Containers: can build, run, and debug Docker/Podman containers
-  - Kubernetes: can deploy and maintain applications on a cluster
-  - CI/CD: can write and maintain pipeline definitions
-  - IaC: can write and apply Terraform configurations
-  - Monitoring: can set up dashboards and write alert rules
-
-What to build next:
-  - Contribute to your team's existing IaC codebase (small PRs, learn from review)
-  - Shadow senior engineers on-call (observe incidents, do not drive)
-  - Build a personal project: deploy a real application end-to-end with the full stack
-  - Get comfortable with one cloud provider's core services (AWS, GCP, or Azure)
-
-First certifications to consider:
-  - CKA (Certified Kubernetes Administrator) — validates Kubernetes fundamentals
-  - AWS Solutions Architect Associate — validates cloud fundamentals
-  - HashiCorp Terraform Associate — validates IaC skills
-```
-
-### Mid-Level DevOps / Platform Engineer (2–5 years)
-
-```
-New skills to develop:
-  - Platform thinking: designing self-service systems, not just operating infrastructure
-  - Security: threat modelling, secrets management, RBAC design
-  - Reliability: SLOs, error budgets, incident response, chaos engineering
-  - Multi-team coordination: working across teams on shared infrastructure
-  - Cost engineering: understanding and optimising cloud spend
-
-Responsibilities that indicate growth:
-  - Leading an on-call rotation
-  - Designing and implementing a significant infrastructure change end-to-end
-  - Writing technical design documents and getting them approved
-  - Mentoring junior engineers
-  - Driving post-incident reviews and tracking action items to completion
-
-Certifications to consider:
-  - CKS (Certified Kubernetes Security Specialist)
-  - AWS Solutions Architect Professional
-  - CKAD (Certified Kubernetes Application Developer — understand the developer perspective)
-```
-
-### Senior Platform / Staff Engineer (5+ years)
-
-```
-New skills to develop:
-  - Organisational influence: shaping engineering culture, not just individual systems
-  - System design at scale: designing for 10× current load, multi-region, multi-cloud
-  - Vendor evaluation and build-vs-buy decisions
-  - Defining and measuring developer experience
-  - Communicating technical strategy to non-technical stakeholders
-
-Signs you are operating at this level:
-  - Other engineers consult you for architectural decisions
-  - You are driving multi-quarter roadmaps, not just sprints
-  - You have defined and launched significant platform improvements that changed how engineers work
-  - You are able to explain infrastructure trade-offs to product managers and executives clearly
-
-Career paths from here:
-  - Staff/Principal Engineer (IC track): deeper technical expertise, cross-org influence
-  - Engineering Manager (management track): team leadership, hiring, career development
-  - Head of Platform / VP Infrastructure: organisational leadership, budget ownership
-  - Startup CTO/VP Engineering: early-stage technical leadership
-  - Independent consultant: advisory work for multiple companies
-```
-
-### Building in Public
-
-The fastest career accelerator available to you is making your work visible:
-
-```
-Write:
-  - Post-incident reviews (anonymised) — demonstrate analytical thinking
-  - Technical deep-dives on tools you have mastered — demonstrate expertise
-  - Architecture decision records — demonstrate systems thinking
-  - "How we scaled X" narratives — demonstrate impact
-
-Speak:
-  - Internal tech talks first — lowest barrier, highest learning value
-  - Local meetups (DevOps Days, KubeCon regional events) — grow your network
-  - Conference proposals — most conferences actively seek diverse speakers
-
-Build:
-  - Open-source contributions to tools you use — build relationships with maintainers
-  - Side projects with real users — practice full ownership
-  - Blog about what you built and what you learned — compound learning
-
-Network:
-  - Be genuinely helpful in Slack communities (Kubernetes, CNCF, local meetups)
-  - Review other engineers' open-source PRs
-  - Interview at other companies periodically — even without intent to move,
-    it calibrates your market value and exposes you to new problems
-```
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Cost-Aware Platform Engineering
-
-Cloud infrastructure costs are real business costs. An engineer who understands and proactively manages cloud spend is more valuable than one who does not. Platform teams are in a unique position to drive cost efficiency across the organisation.
-
-### FinOps Fundamentals
-
-```
-FinOps principles:
-  - Visibility: every team should see their own cloud costs, broken down by service
-  - Accountability: teams are responsible for their cloud spend (not just central IT)
-  - Optimisation: costs are continuously reviewed and reduced; waste is not tolerated
-  - Forecasting: future spend is predictable, not a surprise at month-end
-
-Tagging strategy — the foundation of cost visibility:
-  Every resource must have:
-    env:           production / staging / development
-    team:          checkout / payments / platform / data
-    service:       checkout-api / payment-worker / recommendation-model
-    cost-centre:   engineering / data-science / marketing-tech
-  
-  Enforce with:
-    - AWS Config Rules for tag compliance
-    - Checkov policy in IaC pipeline
-    - Monthly report of untagged resources to engineering leads
-```
-
-### Right-Sizing
-
-```bash
-# AWS Compute Optimizer recommendations
-aws compute-optimizer get-ec2-instance-recommendations \
-  --output json \
-  | jq '.instanceRecommendations[] | {
-      instance: .instanceArn,
-      currentType: .currentInstanceType,
-      recommendedType: (.recommendationOptions[0].instanceType),
-      savings: .recommendationOptions[0].estimatedMonthlySavings.value
-    }' \
-  | jq 'select(.savings > 10)'  # Show only recommendations with > $10/month savings
-
-# Kubernetes resource right-sizing with VPA (Vertical Pod Autoscaler) in recommendation mode
-kubectl apply -f - <<EOF
-apiVersion: autoscaling.k8s.io/v1
-kind: VerticalPodAutoscaler
-metadata:
-  name: checkout-service-vpa
-spec:
-  targetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: checkout-service
-  updatePolicy:
-    updateMode: "Off"  # Recommendation mode only — don't auto-apply
-EOF
-
-# View VPA recommendations
-kubectl describe vpa checkout-service-vpa
-# Shows: recommended request: cpu=150m (currently 500m), memory=256Mi (currently 512Mi)
-# Potential savings: reduce requests, allow tighter bin-packing
-```
-
-### Spot/Preemptible Instances for Cost Reduction
-
-```hcl
-# Terraform — EKS node group with Spot instances for non-critical workloads
-resource "aws_eks_node_group" "spot_workers" {
-  cluster_name    = aws_eks_cluster.main.name
-  node_group_name = "spot-workers"
-  node_role_arn   = aws_iam_role.node.arn
-  subnet_ids      = var.private_subnet_ids
-
-  capacity_type  = "SPOT"
-  instance_types = ["m5.large", "m5a.large", "m4.large", "m5d.large"]
-  # Use multiple instance types — spot market diversification reduces interruption risk
-
-  scaling_config {
-    desired_size = 5
-    min_size     = 2
-    max_size     = 20
-  }
-
-  taint {
-    key    = "spot-instance"
-    value  = "true"
-    effect = "NO_SCHEDULE"
-  }
-}
-```
-
-Deploy workloads that tolerate interruption (batch jobs, non-critical background workers, development environments) on Spot instances. Production Tier 1 services should run on On-Demand instances. A typical split: 70% Spot for batch/dev/staging, 100% On-Demand for Tier 1 production. This can reduce compute costs by 40–60%.
-
-### Cost Anomaly Detection
-
-```bash
-# AWS Cost Anomaly Detection via CLI
-aws ce create-anomaly-monitor \
-  --anomaly-monitor '{
-    "MonitorName": "Platform-Cost-Monitor",
-    "MonitorType": "DIMENSIONAL",
-    "MonitorDimension": "SERVICE"
-  }'
-
-aws ce create-anomaly-subscription \
-  --anomaly-subscription '{
-    "SubscriptionName": "Platform-Cost-Alerts",
-    "MonitorArnList": ["<monitor-arn>"],
-    "Subscribers": [{
-      "Address": "platform-alerts@example.com",
-      "Type": "EMAIL"
-    }],
-    "Threshold": 100,
-    "ThresholdExpression": {
-      "Dimensions": {
-        "Key": "ANOMALY_TOTAL_IMPACT_ABSOLUTE",
-        "MatchOptions": ["GREATER_THAN_OR_EQUAL"],
-        "Values": ["100"]
-      }
-    },
-    "Frequency": "DAILY"
-  }'
-```
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Common Mistakes & Pitfalls
-
-- **Building platforms for the current team size** — the platform you need for 5 teams is not the platform you need for 50. Build for the next 18 months, not next month. Abstract decisions that will be painful to change later (GitOps structure, naming conventions, secret management approach).
-- **Treating platform as infrastructure, not product** — platforms without product management, developer satisfaction metrics, and regular feedback loops drift out of alignment with developer needs. The platform becomes a liability rather than an asset.
-- **Over-engineering the golden path** — a golden path that takes 3 days to navigate is not a path anyone will use. Complexity is the enemy of adoption. Each step in the self-service flow should have a clear purpose and a default that works for 80% of use cases.
-- **Ignoring eBPF security risks** — eBPF programs run in the kernel. A bug in an eBPF program can crash the kernel or introduce a security vulnerability. Vet eBPF tools carefully, prefer verified frameworks (Cilium, Falco) over rolling your own, and keep them updated.
-- **GPU idle waste** — GPU instances are expensive. Without utilisation monitoring and aggressive scale-to-zero policies, ML teams accumulate significant idle GPU costs. Enforce idle timeout policies on GPU nodes and track GPU utilisation as a cost metric.
-- **Not measuring developer experience** — "developers seem happy" is not a metric. Track: time from ticket to first production deployment (new service), deployment frequency per team, CI pipeline duration, on-call pages per engineer per week. These metrics reveal platform friction before engineers start to leave.
-- **Skipping ADRs (Architecture Decision Records)** — platform decisions made without documentation leave the next team member asking "why is it done this way?" and making changes that break implicit assumptions. Write an ADR for every significant architectural decision.
-- **Copying Netflix/Google without their context** — large tech companies publish sophisticated platform architectures that are appropriate for their scale and organisational structure. Building a multi-region, multi-cluster service mesh before you need it is wasted effort and added complexity. Start simple, scale deliberately.
-- **Not deprecating old platforms** — platforms accumulate cruft. The old Jenkins cluster runs alongside the new GitHub Actions runners. The original Terraform state is fragmented across accounts. Technical debt in platform infrastructure is compounded because every team is affected by it. Invest in deprecation as much as new development.
-- **Treating cost as someone else's problem** — engineering teams that do not see their cloud costs have no incentive to optimise. Implement showback (cost visibility) before chargeback (cost allocation). Start by giving teams dashboards; culture shifts before financial accountability is enforced.
-- **Not building for multi-tenancy from day one** — a platform built for one team will be painful to extend to twenty teams. Multi-tenant patterns (namespace isolation, RBAC per team, cost allocation by team) are much easier to add at the start than to retrofit.
-- **Underestimating the people side of platform adoption** — the best platform in the world will not be adopted if engineers do not trust it, do not know it exists, or do not understand its value. Developer advocacy, documentation quality, and responsiveness to issues drive adoption more than feature completeness.
-- **Assuming eBPF eliminates the need for application-level observability** — eBPF gives you system-level visibility. Business-level metrics (conversion rate, payment success rate, user session duration) still require application instrumentation. Both layers are needed.
-- **No clear ownership boundary between platform and product teams** — "who owns the Kubernetes NetworkPolicy for the checkout service?" should have a clear answer. Ambiguous ownership leads to configuration drift and incident response confusion.
-- **Abandoning the capstone project** — the most common completion failure in any course is the capstone. The capstone project is where all your learning integrates into real muscle memory. Block time in your calendar, define a specific end-state ("I will have a working deployment of project X using the full stack"), and ship it.
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Interview Prep
-
-**Q: What is platform engineering and how does it differ from traditional DevOps?**
-
-A: Traditional DevOps blurs the line between development and operations — teams take ownership of the full lifecycle of their services, including infrastructure. Platform engineering is the next evolution: a dedicated team builds the infrastructure abstractions, golden paths, and self-service tools that let product teams ship without needing deep infrastructure expertise. DevOps is a culture and practice; platform engineering is a product discipline. The platform team has a roadmap, measures developer experience, and treats developers as customers. They are not a gatekeeper or an ops team that responds to tickets — they build and maintain a product (the IDP) that product teams opt into because it makes their lives easier.
-
-**Q: Explain eBPF and give a concrete example of where it is used in production infrastructure.**
-
-A: eBPF (extended Berkeley Packet Filter) is a technology that allows running sandboxed programs in the Linux kernel, triggered by kernel events such as system calls, network packet arrival, or function calls. eBPF programs are verified by the kernel before loading, ensuring they cannot crash the kernel or access arbitrary memory. A concrete production example: Cilium uses eBPF to implement Kubernetes networking (replacing iptables-based kube-proxy) and enforce NetworkPolicies including Layer 7 HTTP rules. eBPF is used for this because it can intercept and act on network packets at the earliest possible point in the kernel stack — before the socket layer — achieving lower latency and higher throughput than iptables-based approaches. Another example: Parca and Pyroscope use eBPF to collect CPU profiles from production processes by hooking into kernel scheduling events, achieving sub-1% overhead continuous profiling.
-
-**Q: How do you evaluate whether an organisation needs an Internal Developer Platform?**
-
-A: Ask these diagnostic questions: How long does it take a new engineer to make their first production deployment? (If > 1 week, platform investment is likely justified.) Do multiple teams solve the same infrastructure problems independently? (If yes, the deduplication value of a platform is high.) How much time do senior engineers spend on infrastructure questions from product teams? (If it is significant, abstraction via a platform frees that time.) Are production incidents frequently caused by infrastructure misconfigurations in product team code? (If yes, golden paths with guardrails would help.) Is cloud spend growing faster than team size? (Shared, optimised infrastructure is more cost-efficient.) An IDP has a clear ROI when engineer-hours spent on infrastructure repetition exceeds the cost of a dedicated platform team — typically around 20–30 product teams.
-
-**Q: What is GitOps and what problem does it solve?**
-
-A: GitOps is the practice of managing infrastructure and application configuration by storing the desired state in a Git repository and using automated reconciliation to bring the actual state into alignment with the desired state. It solves several problems: auditability (every change to production is a Git commit, reviewed, and attributed to a person), disaster recovery (the entire cluster state can be recreated from the Git repository), reduced human error (no direct `kubectl apply` to production — changes go through PR review and automated deployment), and drift detection (the GitOps controller continuously compares actual vs. desired state and alerts on drift). ArgoCD and FluxCD are the leading Kubernetes GitOps tools. The most common implementation: developers merge changes to a `main` branch, ArgoCD detects the change and synchronises the Kubernetes cluster to match the new state, eliminating direct cluster access for day-to-day changes.
-
-**Q: Describe a progressive delivery strategy and when you would use each type.**
-
-A: Progressive delivery is the practice of releasing software to incrementally larger audiences to limit the blast radius of failures. Key strategies: Canary releases route a small percentage of traffic (5–20%) to the new version; if metrics are healthy, traffic gradually increases to 100%. Use for: any production change with meaningful risk, or when you want automated rollback based on SLO signals. Blue-green deployment maintains two identical environments; traffic switches atomically from blue to green. Use for: stateful changes that cannot be incrementally rolled out, database migrations, or when you need instant rollback capability. Feature flags decouple deployment from release; code ships to all users, feature is toggled on for specific segments. Use for: A/B testing, gradual feature rollout by customer segment, or emergency kill switches. Shadow testing runs the new version in parallel with no user impact, comparing outputs. Use for: high-risk algorithmic changes (ML model version, pricing logic) where you want to validate results before any user sees them.
-
-**Q: How does FinOps apply to a platform engineering team?**
-
-A: Platform engineering teams have direct leverage over cloud costs because they control the abstractions all other teams build on. FinOps responsibilities for a platform team include: implementing resource tagging standards and enforcing them via policy-as-code so every resource is attributable to a team and service; building cost visibility dashboards per team (showback before chargeback); right-sizing default resource requests in golden path templates (teams that inherit defaults should get sensible ones, not over-provisioned defaults); managing reserved instances and savings plans at the organisation level; implementing spot/preemptible instance policies for appropriate workloads; and setting up cost anomaly detection alerts. The platform team is uniquely positioned to identify cross-team savings opportunities: if ten teams all over-provision their service accounts or all use a suboptimal database tier, the platform team can identify this in aggregate and address it.
-
-**Q: What is a Service Mesh and when is the operational overhead justified?**
-
-A: A service mesh is an infrastructure layer that handles service-to-service communication, typically implemented as a set of sidecar proxies (Envoy) injected into each pod alongside the application container. It provides: mTLS between all services (transparent encryption and authentication), distributed tracing without application code changes, traffic management (canary routing, circuit breaking, retries, timeouts), and rich network observability (request latency, error rates, by service-pair). The operational overhead is significant: the control plane (Istio/Linkerd) must be maintained and upgraded; sidecar proxies add ~50ms cold-start and ~10MB memory per pod; debugging network issues is more complex through a proxy. Justified when: security requirements mandate mTLS everywhere; you need L7 traffic management without changing application code; you have > 20 services and want centralised observability and policy; or you are replacing multiple per-service approaches to retry logic, circuit breaking, and tracing with a single infrastructure solution.
-
-**Q: How do you approach technical debt in platform infrastructure?**
-
-A: Platform technical debt compounds across every team that uses the platform, so it is higher-impact than application-level debt. Approach: first, make it visible — maintain a technical debt register with rough effort estimates and blast radius assessment. Second, integrate debt reduction into planning: reserve 20% of platform engineering capacity for debt reduction every sprint rather than deferring it indefinitely. Third, prioritise by impact: debt that causes incident response confusion, developer frustration, or security risk is addressed first. Fourth, make improvements incremental and backward-compatible where possible — breaking changes to shared infrastructure are expensive to coordinate. Fifth, retire old systems deliberately: for every new capability you introduce, identify the old capability it replaces and create a deprecation timeline with a migration path. Platform debt examples that are often neglected: fragmented Terraform state, multiple overlapping CI/CD systems, deprecated Kubernetes API versions in use, outdated base images in golden path templates.
-
-**Q: What are the DORA metrics and why do they matter to platform engineers?**
-
-A: DORA (DevOps Research and Assessment) metrics are four key metrics that measure software delivery performance: Deployment Frequency (how often code is deployed to production), Lead Time for Changes (time from commit to production), Change Failure Rate (percentage of deployments that cause incidents or require rollback), and Mean Time to Recovery (how long to recover from a production incident). They matter to platform engineers because the platform team's work directly influences all four: CI/CD pipeline speed affects lead time; deployment automation reliability affects change failure rate; runbook quality and observability tooling affect MTTR; CI/CD friction affects deployment frequency. Tracking DORA metrics gives platform teams quantitative evidence that their work improves delivery performance — essential for justifying investment in platform capabilities to leadership.
-
-**Q: Describe the build-vs-buy decision framework for platform tooling.**
-
-A: Evaluate buy (commercial SaaS), build open-source (adopt and configure), or build custom along several dimensions. Differentiation: does this capability differentiate your product? Rarely yes for infrastructure tooling — prefer buy/adopt. Maintenance burden: custom tooling requires engineers to maintain it forever; the true cost is not the build cost, it is the lifetime maintenance cost. Core competency: your team should be expert at deploying and operating tools, not building them from scratch. Buy indicators: the tool solves a well-defined problem, commercial options are mature, vendor lock-in risk is manageable, cost is justified by time saved. Build-open-source indicators: a mature open-source option exists, you have the operational expertise to run it, customisation needs exceed what commercial options allow. Build-custom indicators: no adequate solution exists, the capability is truly differentiated, you have the long-term engineering capacity to maintain it. Common mistake: building custom tooling because the available options have gaps, without honestly assessing whether the gaps justify the maintenance burden of a custom solution.
-
-**Q: How do you manage secrets in an organisation with many teams and services?**
-
-A: A centralised secrets management approach: HashiCorp Vault (or AWS Secrets Manager at scale) as the secrets store, with the External Secrets Operator synchronising secrets into Kubernetes. Each team has a Vault namespace or AWS Secrets Manager path prefix, with RBAC limiting access to their own secrets. Platform team responsibilities: provisioning Vault namespaces for new teams (IDP template), managing Vault HA and disaster recovery, defining secret naming conventions, enforcing secret rotation policies. Individual team responsibilities: managing their own secrets within their namespace, implementing secret rotation for their services, not sharing secrets across namespaces. Enforcement: Gatekeeper or Kyverno policy that rejects pods with hardcoded environment variable values matching known secret patterns. Regular audit: quarterly review of who has access to which secrets, with access reviews for departing employees and stale service accounts.
-
-**Q: What is your approach to on-boarding a new team onto the platform?**
-
-A: A structured on-boarding: Week 1: walkthrough of the IDP — service catalogue, golden path templates, CI/CD pipelines, observability stack. The team creates their first service using the scaffolding template. Week 2: the team deploys their first real workload to the non-production cluster. Platform engineers pair with the team for their first production deployment. Week 3: the team attends the on-call shadowing programme — they shadow a platform on-call engineer for one week before joining the on-call rotation. Month 1: team is fully self-sufficient on the golden path. Any deviations from the golden path are reviewed by the platform team (not blocked, but reviewed and documented). Month 3: the team participates in the platform feedback forum — their experience directly influences the platform roadmap. The goal is that after 1 month, a new team's only touch-points with the platform team are the feedback forum and genuine escalations — not hand-holding for routine operations.
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## A Day in the Life
-
-You are a staff platform engineer at a Series C SaaS company with 35 product engineering teams and a platform team of 12. Your platform serves 350 engineers across 180 microservices. Tuesday.
-
-07:45 — Standup with the team at 09:00 so you have 75 minutes to work before context-switching starts. You are in the middle of migrating the organisation's CI/CD from a self-managed Jenkins cluster (maintained since the company was 20 people) to GitHub Actions with reusable workflow templates. This is a 6-month project. Today's milestone: the sixth team migrates to GitHub Actions — the checkout team, one of the largest and most complex codebases.
-
-You review the checkout team's GitHub Actions workflow. They have three deviations from the golden path: a custom Docker registry authentication step (they use ECR in a different AWS account), a deployment notification to their own Slack channel, and a performance benchmark step that runs after deployment. All three are legitimate. You approve two of them (the ECR auth and Slack notification are documented exceptions) and decline the third — the performance benchmark should run as a separate GitHub Actions workflow triggered by the deployment, not inline in the deployment pipeline, to keep the critical path latency low. You leave a detailed comment explaining the reasoning and link to the documented pattern. The checkout team responds within 10 minutes: they agree. The pipeline is updated and merged.
-
-09:00 — Standup. Three engineers are blocked: one on a Vault secret engine upgrade that requires a maintenance window (schedule for Thursday), one on a Kubernetes version upgrade hitting a known EKS issue (you have the workaround, you will pair after standup), one on a confusing GitOps sync failure in ArgoCD (you know this pattern — it is a resource finaliser issue, 5 minutes to fix).
-
-10:15 — After standups and quick unblocks, you have a 1:1 with the junior platform engineer you are mentoring. They want to understand how to design a multi-tenancy boundary for a new shared service (ML feature store) that multiple product teams will use. You sketch out three approaches: per-team Kubernetes namespaces with RBAC, a single shared namespace with network policies, and a separate cluster. You walk through the trade-offs: namespace isolation is simpler operationally but provides weaker isolation; separate clusters are strongest but most expensive and complex to operate. For a feature store with sensitive customer data used by the ML team and two other teams, you recommend namespace isolation with strict RBAC and Kyverno policies preventing cross-namespace data access. The junior engineer writes an ADR draft — they will present it to the team Friday.
-
-11:00 — Quarterly platform NPS survey results arrive. Overall score: 62 (up from 54 last quarter). Top complaint: "The golden path templates don't support TypeScript monorepos well — our build times are 18 minutes." This is the third time this has appeared in surveys. You move it to the top of the next sprint's backlog and assign it to the engineer who owns CI/CD templates. You reply to the survey comments personally with a brief acknowledgement and timeline — developers notice when you respond, and it builds trust in the feedback loop.
-
-13:00 — Architecture review for a new service from the data engineering team. They want to deploy a Python-based data pipeline that reads from Kafka and writes to BigQuery. Current golden path assumes Node.js or Go services. You review their proposal and ask three questions: Why Python? (Pandas/PySpark — legitimate, data science ecosystem). Why not use the existing Kafka consumer pattern? (Streaming aggregations that the existing consumer cannot express). Can the BigQuery write be done through the existing data warehouse service? (They already tried; the rate limit is too restrictive for their use case.) You approve the Python deviation with two conditions: they adopt the OpenTelemetry Python SDK (not a custom logger), and they add a `data-pipeline: true` label to their pods so cost attribution is correct. This is documented as an approved exception in the service catalogue.
-
-15:00 — The Jenkins-to-GitHub Actions project: you join a demo call with three teams who have not yet migrated. You show their current Jenkins build times vs. equivalent GitHub Actions times (average 40% faster). You show the reduced maintenance burden: no more Jenkins agents to patch. You address their concern about secrets migration: the External Secrets Operator handles this; their secrets are already in Vault. Two teams commit to migrating next sprint. The third has a compliance requirement that needs a documented exception from security before they can use GitHub-hosted runners — you log the action item and follow up with security tomorrow.
-
-17:00 — You review the week's Grafana dashboard for the platform itself: CI/CD median duration (14.2 minutes, up from 13.8 — worth watching), ArgoCD sync errors (12 today, all resolved, 3 patterns that need root cause analysis), Vault request rate (nominal), platform engineering on-call pages this week (2, both resolved in < 30 minutes). Everything is in the green.
-
-The month's biggest platform investment — the GitHub Actions migration — is 6 teams migrated out of 35. You are on track. Not every day involves heroics. Most days, the platform works. Engineers ship features. The invisible work is the work.
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Advanced Terraform Patterns — Workspaces & Testing
-
-After you know the basics of Terraform, the patterns that separate junior IaC from production-grade IaC become the focus. These are the patterns that enable large organisations to manage complex cloud infrastructure at scale.
-
-### Module Composition and Dependency Injection
-
-Rather than a monolithic root module, compose infrastructure from small, focused modules that accept their dependencies via variables:
-
-```hcl
-# modules/service/main.tf — reusable service module
-variable "name" {
-  description = "Service name"
-  type        = string
-}
-
-variable "vpc_id" {
-  description = "VPC to deploy into — injected by caller"
-  type        = string
-}
-
-variable "subnet_ids" {
-  description = "Private subnets — injected by caller"
-  type        = list(string)
-}
-
-variable "security_group_ids" {
-  description = "Security groups for the service — injected by caller"
-  type        = list(string)
-}
-
-variable "container_image" {
-  type = string
-}
-
-variable "environment_variables" {
-  type    = map(string)
-  default = {}
-}
-
-# The module creates: ECS service, task definition, CloudWatch log group, IAM role
-# But receives networking and security from the caller — separation of concerns
-```
-
-Calling the module:
-
-```hcl
-# environments/production/main.tf
-module "network" {
-  source = "../../modules/network"
-  cidr   = "10.0.0.0/16"
-  azs    = ["us-east-1a", "us-east-1b", "us-east-1c"]
-}
-
-module "checkout_service" {
-  source             = "../../modules/service"
-  name               = "checkout"
-  vpc_id             = module.network.vpc_id
-  subnet_ids         = module.network.private_subnet_ids
-  security_group_ids = [module.network.app_security_group_id]
-  container_image    = "your-org/checkout:${var.app_version}"
-}
-```
-
-This composition pattern enables: independent testing of modules, reuse across environments (the same module serves production and staging with different variable values), clear ownership boundaries (network team owns the network module, app team configures the service module).
-
-### Terraform Workspaces vs. Directory Structure
-
-Two approaches to managing multiple environments:
-
-```
-Workspace approach:
-  - Single directory of Terraform code
-  - terraform workspace new production
-  - terraform workspace select production
-  - terraform apply
-
-  Advantages: DRY — one copy of the code
-  Disadvantages: workspace switching is error-prone, state is in the same backend bucket,
-                 harder to enforce different approval gates per environment
-
-Directory structure approach (recommended for most teams):
-  terraform/
-    modules/           # Shared reusable modules
-    environments/
-      development/     # Independent state, can be applied freely
-      staging/         # Requires PR approval
-      production/      # Requires 2-person approval + change request
-
-  Advantages: clear isolation, independent state, different CI/CD gates per environment
-  Disadvantages: some code duplication (mitigated by shared modules)
-
-Recommendation: use directory structure with shared modules for teams > 5 engineers
-or for systems with strict change control requirements.
-```
-
-### Terragrunt for DRY Environment Configuration
-
-Terragrunt adds a thin wrapper around Terraform that eliminates backend configuration duplication and enables inheritance of common values:
-
-```hcl
-# terragrunt.hcl (root)
-locals {
-  account_id = get_aws_account_id()
-  region     = "us-east-1"
-}
-
-generate "backend" {
-  path      = "backend.tf"
-  if_exists = "overwrite_terragrunt"
-  contents  = <<EOF
-terraform {
-  backend "s3" {
-    bucket         = "terraform-state-${local.account_id}"
-    key            = "${path_relative_to_include()}/terraform.tfstate"
-    region         = "${local.region}"
-    dynamodb_table = "terraform-locks"
-    encrypt        = true
-  }
-}
-EOF
-}
-
-# environments/production/checkout-service/terragrunt.hcl
-include "root" {
-  path = find_in_parent_folders()
-}
-
-terraform {
-  source = "../../../modules/service"
-}
-
-inputs = {
-  name            = "checkout"
-  container_image = "your-org/checkout:v2.3.1"
-  min_replicas    = 5
-  max_replicas    = 20
-  environment     = "production"
-}
-```
-
-### Testing Infrastructure Code
-
-Terraform code that is never tested accumulates hidden bugs. Three testing levels:
-
-```bash
-# Level 1: Validate syntax and schema
-terraform validate
-terraform fmt --check --diff
-
-# Level 2: Policy testing with conftest
-terraform plan -out=plan.tfplan
-terraform show -json plan.tfplan > plan.json
-conftest test plan.json --policy ./policies/
-
-# Level 3: Integration testing with Terratest (Go)
-# tests/service_test.go
-func TestServiceModule(t *testing.T) {
-  opts := &terraform.Options{
-    TerraformDir: "../modules/service",
-    Vars: map[string]interface{}{
-      "name":            "test-checkout",
-      "container_image": "nginx:latest",
-      "environment":     "test",
-    },
-  }
-
-  defer terraform.Destroy(t, opts)
-  terraform.InitAndApply(t, opts)
-
-  serviceURL := terraform.Output(t, opts, "service_url")
-  http_helper.HttpGetWithRetry(t, serviceURL+"/health", nil, 200, "ok", 10, 5*time.Second)
-}
-```
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Service Mesh Advanced Operations
-
-A service mesh in production requires ongoing operational care beyond the initial installation. Here are the patterns that keep a service mesh healthy and useful rather than a source of incidents.
-
-### Certificate Management and Rotation
-
-Istio rotates workload certificates automatically using the SPIFFE standard. Understanding the certificate chain helps you debug mTLS issues:
-
-```bash
-# Inspect a pod's certificate
-istioctl proxy-config secret deploy/checkout-service -n production
-
-# Output shows:
-# RESOURCE NAME   TYPE           STATUS    VALID CERT  SERIAL NUMBER  NOT AFTER          NOT BEFORE
-# default         Cert Chain     ACTIVE    true        abc123         2026-01-15T...     2026-01-14T...
-# ROOTCA          CA             ACTIVE    true        xyz789         2030-01-01T...     2023-01-01T...
-
-# Certificate expires? Istio rotates every 24 hours by default
-# If a pod does not get a certificate, check:
-istiod_logs=$(kubectl logs -n istio-system deploy/istiod | grep "certificate\|cert\|ERROR")
-
-# Manual certificate rotation for the entire mesh
-kubectl rollout restart deployment/istiod -n istio-system
-```
-
-### Traffic Management Patterns
-
-```yaml
-# VirtualService — progressive traffic shifting for canary deployment
-apiVersion: networking.istio.io/v1alpha3
-kind: VirtualService
-metadata:
-  name: payment-service
-spec:
-  hosts:
-    - payment-service
-  http:
-    - match:
-        - headers:
-            x-canary:
-              exact: "true"
-      route:
-        - destination:
-            host: payment-service
-            subset: v2
-    - route:
-        - destination:
-            host: payment-service
-            subset: v1
-          weight: 95
-        - destination:
-            host: payment-service
-            subset: v2
-          weight: 5  # 5% of non-canary traffic to v2
-
-# DestinationRule — circuit breaker configuration
-apiVersion: networking.istio.io/v1alpha3
-kind: DestinationRule
-metadata:
-  name: payment-service
-spec:
-  host: payment-service
-  trafficPolicy:
-    connectionPool:
-      http:
-        http1MaxPendingRequests: 100
-        http2MaxRequests: 1000
-    outlierDetection:
-      consecutive5xxErrors: 5        # After 5 consecutive errors...
-      interval: 10s                  # ...measured over 10 seconds...
-      baseEjectionTime: 30s          # ...eject the endpoint for 30 seconds
-      maxEjectionPercent: 50         # Never eject more than 50% of endpoints
-  subsets:
-    - name: v1
-      labels:
-        version: v1
-    - name: v2
-      labels:
-        version: v2
-```
-
-### Observability with Kiali and Jaeger
-
-Kiali provides a service mesh topology visualisation that makes traffic patterns visible:
-
-```bash
-# Install Kiali
-kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/kiali.yaml
-
-# Access (port-forward for local access)
-kubectl port-forward svc/kiali 20001:20001 -n istio-system
-
-# Kiali shows:
-# - Service dependency graph with real-time traffic
-# - Error rates per service-to-service connection
-# - Latency distribution
-# - Traffic routing (which subsets are receiving traffic)
-# - mTLS status per connection (padlock icon = encrypted)
-```
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Advanced CI/CD Patterns
-
-Beyond basic pipeline definition, mature CI/CD systems implement patterns that improve reliability, security, and developer experience at scale.
-
-### Reusable Workflow Templates
-
-In a large organisation, every team should not write their own pipeline YAML. Centralised, tested workflow templates reduce duplication and ensure security standards are applied uniformly:
-
-```yaml
-# .github/workflows/deploy-service.yml (in the platform/workflows repository)
-on:
-  workflow_call:
-    inputs:
-      service-name:
-        required: true
-        type: string
-      environment:
-        required: true
-        type: string
-      image-tag:
-        required: true
-        type: string
-    secrets:
-      deploy-token:
-        required: true
-
-jobs:
-  security-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ghcr.io/your-org/${{ inputs.service-name }}:${{ inputs.image-tag }}
-          exit-code: 1
-          severity: CRITICAL
-
-  sign-image:
-    needs: security-scan
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      packages: write
-    steps:
-      - name: Sign with cosign keyless
-        uses: sigstore/cosign-installer@main
-      - run: |
-          cosign sign --yes \
-            ghcr.io/your-org/${{ inputs.service-name }}:${{ inputs.image-tag }}
-
-  deploy:
-    needs: sign-image
-    runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    steps:
-      - name: Deploy via ArgoCD
-        run: |
-          argocd app set ${{ inputs.service-name }} \
-            --kustomize-image ghcr.io/your-org/${{ inputs.service-name }}:${{ inputs.image-tag }}
-          argocd app sync ${{ inputs.service-name }} --timeout 300
-          argocd app wait ${{ inputs.service-name }} --health --timeout 300
-```
-
-Calling the shared workflow from a product team's repository:
-
-```yaml
-# In the checkout-service repository
-jobs:
-  deploy:
-    uses: your-org/platform-workflows/.github/workflows/deploy-service.yml@main
-    with:
-      service-name: checkout-service
-      environment: production
-      image-tag: ${{ github.sha }}
-    secrets:
-      deploy-token: ${{ secrets.DEPLOY_TOKEN }}
-```
-
-Security scan, image signing, and ArgoCD deployment are now platform-owned responsibilities, not per-team responsibilities. When the security scan adds a new check, it applies to all 35 teams automatically.
-
-### Dynamic Environments
-
-Create ephemeral environments per pull request for isolated testing:
-
-```yaml
-# Create a namespace and deploy the PR version to it
-- name: Deploy PR Environment
-  run: |
-    NAMESPACE="pr-${{ github.event.pull_request.number }}"
-    
-    kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
-    
-    # Annotate for auto-cleanup
-    kubectl annotate namespace "$NAMESPACE" \
-      pr-number="${{ github.event.pull_request.number }}" \
-      created-at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    
-    # Deploy using helm with PR-specific values
-    helm upgrade --install pr-checkout-service ./charts/checkout-service \
-      --namespace "$NAMESPACE" \
-      --set image.tag="${{ github.sha }}" \
-      --set ingress.host="pr-${{ github.event.pull_request.number }}.preview.example.com" \
-      --set replicas=1 \
-      --set resources.requests.cpu=100m \
-      --set resources.requests.memory=128Mi
-
-# Cleanup on PR close
-- name: Destroy PR Environment
-  if: github.event.action == 'closed'
-  run: |
-    kubectl delete namespace "pr-${{ github.event.pull_request.number }}" --ignore-not-found
-```
-
-Dynamic environments accelerate QA, reduce "works on my machine" problems, and enable product managers to review features before they merge.
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## SRE Practice: Advanced Topics
-
-Site Reliability Engineering at an advanced level moves beyond tools and into the practice of making reliability a product discipline.
-
-### Toil Reduction
-
-Toil is manual, repetitive operational work that scales with service growth. Google's SRE book defines it precisely: work that is manual, repetitive, automatable, tactical, devoid of enduring value, and grows O(n) with service growth. SREs should spend no more than 50% of their time on toil; the rest should go to engineering that reduces future toil.
-
-Identifying toil in your environment:
-```
-Toil indicators:
-  - The same runbook step is executed more than once a week
-  - On-call engineers perform the same manual remediation repeatedly
-  - Provisioning a new service requires a human to touch > 3 systems
-  - Certificate renewals are performed manually
-  - Database restores are performed manually for development environments
-  - Access requests require a Jira ticket and wait for manual approval
-
-Toil reduction playbook:
-  1. Measure: how many times per week is this task performed? How long does it take?
-  2. Automate: can this be handled by a script, an operator, or a self-service form?
-  3. Eliminate: does this task need to exist? Can the underlying cause be fixed?
-  4. Delegate: can a lower-tier team or self-service portal handle this without SRE involvement?
-
-Example: database restore requests for developers
-  Before: developer files a ticket → SRE creates snapshot → restores to dev namespace → notifies developer (2 hours, 30 minutes SRE effort)
-  After: developer runs `platform restore database <source> <destination>` in Slack → bot validates permissions → initiates automated restore → notifies developer (15 minutes, 0 SRE effort)
-  Toil eliminated: ~30 minutes × 20 requests/week = 10 hours/week of SRE time recovered
-```
-
-### Capacity Planning at Scale
-
-For large systems, capacity planning requires statistical modelling, not just load testing:
-
-```python
-# capacity_model.py — simple capacity projection
-import pandas as pd
-import numpy as np
-from sklearn.linear_model import LinearRegression
-
-# Load historical metrics from Prometheus/Grafana
-# (exported as CSV from Grafana)
-df = pd.read_csv('metrics/checkout_rps_90days.csv')
-df['date'] = pd.to_datetime(df['timestamp'])
-df['day_of_year'] = df['date'].dt.dayofyear
-
-# Fit linear regression on daily peak RPS
-X = df[['day_of_year']].values
-y = df['peak_rps'].values
-
-model = LinearRegression()
-model.fit(X, y)
-
-# Project 90 days forward
-future_days = np.array([[df['day_of_year'].max() + i] for i in range(1, 91)])
-projected_rps = model.predict(future_days)
-
-current_capacity_rps = 2400  # Max safe capacity at current fleet size
-days_to_capacity = None
-
-for i, rps in enumerate(projected_rps):
-    if rps > current_capacity_rps * 0.8:  # 80% threshold
-        days_to_capacity = i + 1
-        break
-
-print(f"Current peak RPS: {y[-1]:.0f}")
-print(f"Projected peak in 90 days: {projected_rps[-1]:.0f}")
-if days_to_capacity:
-    print(f"WARNING: Will hit 80% capacity in {days_to_capacity} days")
-    print(f"Scale-up required: add {int((projected_rps[days_to_capacity-1] / current_capacity_rps * 1.2 - 1) * 100)}% capacity")
-else:
-    print("No capacity action required in the next 90 days")
-```
-
-### Error Budget Policy
-
-A formal error budget policy makes the implicit trade-off between velocity and reliability explicit and removes it from individual negotiation:
-
-```
-Error Budget Policy — Checkout Service
-Version: 2.1 | Owner: Checkout Team + Platform Team | Review: Quarterly
-
-Definitions:
-  - SLO: 99.9% availability over 28-day rolling window
-  - Error Budget: 0.1% of requests (approximately 43 minutes of downtime equivalent per month)
-  - Burn Rate: current rate of error budget consumption
-
-Policy:
-  Budget consumed 0-25%: No restrictions. Deploy at will.
-
-  Budget consumed 25-50%: Yellow alert.
-    - Post weekly error budget status in #checkout-engineering
-    - Review recent incidents for patterns
-    - No new risky deployments without explicit tech lead approval
-
-  Budget consumed 50-75%: Orange alert.
-    - Freeze all non-critical feature deployments
-    - Reliability work only until budget returns below 50%
-    - Platform team consulted on root causes
-    - Weekly sync with engineering manager
-
-  Budget consumed 75-100%: Red alert.
-    - Complete deployment freeze (security patches excepted)
-    - Incident review with all senior engineers
-    - Reliability sprint: next two sprints are 100% reliability work
-    - Executive communication if not resolved within 7 days
-
-  Budget exhausted (>100%):
-    - Notify VP Engineering
-    - SLA review with product and business stakeholders
-    - External customer communication if applicable
-    - Post-incident review of how this was allowed to happen
-```
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Further Reading (Supplemental)
-
-- [Team Topologies](https://teamtopologies.com/) — Influential book on structuring engineering organisations for fast flow. The conceptual foundation for platform engineering.
-- [The Platform Engineering Guide](https://platformengineering.org/blog/what-is-platform-engineering) — Community-maintained resource hub for platform engineers.
-- [Backstage Documentation](https://backstage.io/docs/) — Complete guide to the Backstage IDP framework.
-- [Learning eBPF](https://isovalent.com/books/learning-ebpf/) — Free O'Reilly book by Liz Rice on eBPF from fundamentals to production use.
-- [Cilium Documentation](https://docs.cilium.io/) — Comprehensive guide to eBPF-based Kubernetes networking.
-- [Google SRE Workbook](https://sre.google/workbook/table-of-contents/) — Practical SRE patterns from Google engineers.
-- [Accelerate: The Science of Lean Software and DevOps](https://itrevolution.com/accelerate-book/) — Research-backed evidence for DevOps practices by Nicole Forsgren, Jez Humble, and Gene Kim.
-- [Production Kubernetes](https://www.oreilly.com/library/view/production-kubernetes/9781492092599/) — Advanced Kubernetes patterns for operating at scale.
-- [Cloud FinOps](https://www.oreilly.com/library/view/cloud-finops/9781492054610/) — Practical guide to cloud financial management.
-- [Designing Distributed Systems](https://www.oreilly.com/library/view/designing-distributed-systems/9781491983638/) — Patterns and paradigms for scalable, reliable systems by Brendan Burns (Kubernetes co-creator).
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-## Congratulations!
-
-You have completed the **DevOps Career Path** course. You now have the knowledge and practical skills to:
-
-- Build and operate production Linux infrastructure
-- Write automation scripts and manage configuration with Ansible
-- Deploy containerized applications with Docker and Podman on Kubernetes
-- Provision cloud infrastructure with Terraform and OpenTofu
-- Build CI/CD pipelines with GitHub Actions, GitLab CI, and Jenkins
-- Monitor systems with Prometheus, Grafana, and Zabbix
-- Centralize logs with the ELK Stack and Loki
-- Secure infrastructure with DevSecOps practices, Vault, and OPA
-- Design HA systems and execute disaster recovery
-- Implement GitOps with ArgoCD and Flux
-- Manage service-to-service security with Istio or Linkerd
-
-**Next steps:**
-1. Complete the capstone project
-2. Pursue the CKA certification
-3. Build something real — the best way to learn is to deploy
-4. Contribute to open-source DevOps tooling
-5. Share your knowledge with others
-
-[↑ Back to TOC](#table-of-contents)
-
----
-
-*© 2026 UncleJS — Licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Non-commercial use only. Share alike with attribution. See [LICENSE.md](./LICENSE.md).*

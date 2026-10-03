@@ -132,6 +132,12 @@ A storage system for container images (e.g., Docker Hub, GitHub Container Regist
 **Container Runtime**
 The software responsible for running containers (e.g., containerd, CRI-O, runc).
 
+**Cosign**
+A Sigstore tool that signs and verifies OCI images. The signature is checked at deploy time so a substituted image is rejected.
+
+**CRD (Custom Resource Definition)**
+A Kubernetes API extension that defines a new resource type. Operators watch those custom resources and reconcile them.
+
 **cron / crontab**
 A time-based job scheduler in Linux. `crontab` is the file that defines scheduled commands using a five-field time expression.
 
@@ -201,6 +207,9 @@ A popular log management stack consisting of **E**lasticsearch (storage/search),
 **Environment Variable**
 A dynamic named value stored in a process's environment, used to configure applications without hardcoding values (e.g., `DATABASE_URL`, `API_KEY`).
 
+**Error Budget**
+The amount of unreliability an SLO allows in a period. If a service targets 99.9% availability in a 30-day month, the budget is about 43 minutes of downtime. Burning the budget is the signal to slow feature work and fix reliability.
+
 **Etcd**
 A distributed key-value store used by Kubernetes to store all cluster state and configuration data.
 
@@ -226,6 +235,9 @@ A network security system that monitors and controls incoming and outgoing netwo
 1. In Git: a personal copy of another person's repository.
 2. In open source: a project derived from an existing project's source code (e.g., OpenTofu forked from Terraform).
 
+**Flux**
+A set of Kubernetes controllers that pull manifests and Helm releases from Git and reconcile the cluster to that desired state.
+
 **FQDN (Fully Qualified Domain Name)**
 A complete domain name that specifies a host's exact location in DNS (e.g., `web01.prod.example.com`).
 
@@ -234,6 +246,9 @@ A complete domain name that specifies a host's exact location in DNS (e.g., `web
 ---
 
 ## G
+
+**Gatekeeper**
+A Kubernetes admission controller that enforces OPA policies on objects before they are stored in the API.
 
 **Git**
 A distributed version control system for tracking changes in source code and coordinating work among developers.
@@ -245,7 +260,7 @@ A CI/CD platform built into GitHub that uses YAML-based workflow files stored in
 A CI/CD platform built into GitLab, configured via a `.gitlab-ci.yml` file at the repository root.
 
 **GitOps**
-An operational framework that uses Git as the single source of truth for declarative infrastructure and application configuration.
+An operational framework that uses Git as the single source of truth for declarative infrastructure and application configuration. A controller in the cluster reconciles live state to Git. It does not push credentials out of the cluster.
 
 **Grafana**
 An open-source analytics and visualization platform used to create dashboards from metrics stored in Prometheus, Zabbix, and other data sources.
@@ -270,6 +285,9 @@ A package manager for Kubernetes that bundles related manifests into reusable, v
 
 **Host (Zabbix)**
 A monitored entity in Zabbix — could be a physical server, VM, network device, or application.
+
+**HPA (Horizontal Pod Autoscaler)**
+A Kubernetes controller that changes the replica count of a workload from a metric such as CPU. GitOps self-heal must ignore `/spec/replicas` while an HPA is writing that field.
 
 **HTTP/HTTPS**
 - **HTTP**: Hypertext Transfer Protocol — the foundation of web communication.
@@ -338,6 +356,9 @@ The command-line tool for interacting with Kubernetes clusters (e.g., `kubectl g
 **Kubernetes (K8s)**
 An open-source container orchestration system for automating deployment, scaling, and management of containerized applications.
 
+**Kyverno**
+A Kubernetes-native policy engine. Policies are Kubernetes resources, not a separate language.
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -389,6 +410,9 @@ A reusable, self-contained collection of Terraform/OpenTofu configuration files 
 **Mount**
 The process of making a filesystem or directory accessible at a specified location in the directory tree. Used in containers for persistent storage (volumes).
 
+**mTLS (mutual TLS)**
+TLS where both sides present certificates. Service meshes use it so pod-to-pod traffic is authenticated and encrypted.
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -399,7 +423,10 @@ The process of making a filesystem or directory accessible at a specified locati
 A logical partition within a Kubernetes cluster that isolates resources between teams, environments, or applications.
 
 **Namespace (Linux)**
-A kernel feature that isolates system resources (processes, network, filesystem) — the foundation of container isolation.
+A kernel feature that isolates system resources — the foundation of container isolation. Current kernels have eight types: mnt, pid, net, uts, ipc, user, cgroup, and time.
+
+**NetworkPolicy**
+A Kubernetes object that allows or denies traffic to and from pods. A default-deny policy drops traffic that no rule allows.
 
 **Node (Kubernetes)**
 A physical or virtual machine that runs containerized workloads as part of a Kubernetes cluster.
@@ -420,7 +447,10 @@ The ability to understand the internal state of a system by examining its output
 A general-purpose policy engine that enables policy-as-code across the stack — used in Kubernetes via Gatekeeper.
 
 **OpenTofu**
-An open-source fork of Terraform, maintained by the Linux Foundation, created after HashiCorp changed Terraform's license to BSL in 2023. Fully compatible with Terraform up to version 1.5.
+An open-source fork of Terraform, maintained by the Linux Foundation, created after HashiCorp changed Terraform's license to BSL. Current OpenTofu releases are their own line. Swapping a Terraform binary for OpenTofu still needs a plan diff.
+
+**Operator**
+A Kubernetes controller that encodes operational knowledge for an application. It watches a custom resource and reconciles the cluster toward that spec.
 
 **Orchestration**
 The automated coordination and management of complex systems and services — e.g., Kubernetes orchestrates containers.
@@ -433,6 +463,9 @@ The automated coordination and management of complex systems and services — e.
 
 **Package Manager**
 A tool for installing, updating, and managing software packages — e.g., `apt` (Debian/Ubuntu), `yum`/`dnf` (RHEL/Rocky), `brew` (macOS).
+
+**PDB (Pod Disruption Budget)**
+A Kubernetes object that limits how many pods of an application may be unavailable during a voluntary disruption such as a node drain.
 
 **Pipeline**
 An automated sequence of steps (build → test → deploy) that code changes pass through from commit to production.
@@ -500,6 +533,9 @@ A documented set of procedures for operating, troubleshooting, and recovering a 
 **SAST (Static Application Security Testing)**
 Security analysis of source code without executing it — identifies vulnerabilities early in the development process.
 
+**SBOM (Software Bill of Materials)**
+An inventory of the components in an artifact. Scanners and admission policies use it to see what a build actually shipped.
+
 **SCP (Secure Copy Protocol)**
 A command-line tool for securely transferring files between hosts using SSH.
 
@@ -509,6 +545,9 @@ A Kubernetes object used to store sensitive information such as passwords, token
 **Secrets Management**
 The practice of securely storing, accessing, and auditing sensitive credentials — tools include HashiCorp Vault, AWS Secrets Manager, and Azure Key Vault.
 
+**Semgrep**
+A static analysis tool that matches source patterns. Alternative patterns belong under `pattern-either`. A list of `patterns` is a logical AND.
+
 **Service (Kubernetes)**
 A Kubernetes object that exposes a set of pods as a stable network endpoint with a consistent IP address and DNS name.
 
@@ -517,6 +556,15 @@ An infrastructure layer that manages service-to-service communication within a m
 
 **Shell**
 A command-line interpreter that provides a user interface to the operating system (e.g., Bash, Zsh, Fish).
+
+**SLI (Service Level Indicator)**
+A measured signal of user-facing behavior, such as the proportion of requests that succeed or the latency of successful requests.
+
+**SLO (Service Level Objective)**
+A target for an SLI over a window, such as 99.9% of requests succeeding over 30 days. The gap between 100% and the SLO is the error budget.
+
+**SLSA (Supply-chain Levels for Software Artifacts)**
+A framework for build integrity. SLSA v1.0 defines build levels 1, 2, and 3. There is no level 4 in that specification.
 
 **SNMP (Simple Network Management Protocol)**
 A protocol for monitoring and managing network devices — supported by Zabbix for monitoring routers, switches, and printers.
@@ -532,7 +580,7 @@ A cryptographic key pair (public + private) used for passwordless SSH authentica
 - **TLS**: Transport Layer Security — the modern encryption protocol used for HTTPS and other secure communications.
 
 **State (Terraform/OpenTofu)**
-A file (`terraform.tfstate`) that records the current state of managed infrastructure, used to determine what changes need to be applied.
+A file (`terraform.tfstate`) that records the current state of managed infrastructure, used to determine what changes need to be applied. Marking an output `sensitive = true` hides it in the CLI. The value is still stored in state. `sensitive` is not encryption.
 
 **StatefulSet (Kubernetes)**
 A Kubernetes object for managing stateful applications (e.g., databases) that require stable network identities and persistent storage.
@@ -558,6 +606,9 @@ An open-source IaC tool by HashiCorp for provisioning and managing cloud and on-
 **Trigger (Zabbix)**
 A logical expression in Zabbix that evaluates collected metric data and fires an alert when defined thresholds are exceeded.
 
+**Trivy**
+A scanner for container images, filesystems, and IaC. `trivy image` scans an image. `trivy config` scans Terraform and Kubernetes manifests. The older `tfsec` project was archived into Trivy.
+
 [↑ Back to TOC](#table-of-contents)
 
 ---
@@ -577,7 +628,10 @@ The percentage of time a system is operational and available. Expressed as SLA p
 ## V
 
 **Vault (HashiCorp)**
-A secrets management tool that provides secure storage, access control, and auditing for sensitive credentials and tokens.
+A secrets management tool that stores credentials, controls access, and audits use. Dynamic secrets are generated when requested and expire. A dev server prints its root token. It is not automatically the string `root`.
+
+**Velero**
+A tool that backs up and restores Kubernetes objects and persistent volumes.
 
 **VPC (Virtual Private Cloud)**
 An isolated virtual network within a cloud provider — used to segment and secure cloud resources (AWS VPC, Azure VNet, GCP VPC).

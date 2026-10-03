@@ -156,9 +156,9 @@ git clone --depth 1 https://... # Shallow clone — only latest commit (faster f
 
 ```bash
 git status                  # See what's changed
-git diff                    # See unstaged changes
-git diff --staged           # See staged changes
-git diff HEAD               # See all changes vs last commit
+git --no-pager diff                    # See unstaged changes
+git --no-pager diff --staged           # See staged changes
+git --no-pager diff HEAD               # See all changes vs last commit
 
 git add file.txt            # Stage a specific file
 git add .                   # Stage all changes
@@ -171,14 +171,14 @@ git commit -m "feat(auth): add JWT token refresh"   # Commit with message
 # git commit
 # git commit --amend
 
-git log                     # Full commit history
-git log --oneline           # Compact one-line history
-git log --oneline --graph --all   # Visual branch graph
-git log --author="Alice"    # Filter by author
-git log --since="2 weeks ago"     # Filter by date
-git log --follow -- path/to/file  # History of a specific file (follows renames)
-git show abc1234            # Show details of a specific commit
-git show HEAD:path/to/file  # Show a file as it was in HEAD
+git --no-pager log                     # Full commit history
+git --no-pager log --oneline           # Compact one-line history
+git --no-pager log --oneline --graph --all   # Visual branch graph
+git --no-pager log --author="Alice"    # Filter by author
+git --no-pager log --since="2 weeks ago"     # Filter by date
+git --no-pager log --follow -- path/to/file  # History of a specific file (follows renames)
+git --no-pager show abc1234            # Show details of a specific commit
+git --no-pager show HEAD:path/to/file  # Show a file as it was in HEAD
 ```
 
 ### Undoing Changes
@@ -566,7 +566,7 @@ git tag v1.0.0                              # Lightweight tag (just a pointer)
 git tag -a v1.0.0 -m "Release v1.0.0"      # Annotated tag (recommended — stores tagger, date)
 git tag                                     # List all tags
 git tag -l "v1.*"                           # List tags matching pattern
-git show v1.0.0                             # Show tag details
+git --no-pager show v1.0.0                  # Show tag details
 git push origin v1.0.0                      # Push a specific tag
 git push origin --tags                      # Push all tags
 git checkout v1.0.0                         # Checkout a tag (detached HEAD)
@@ -882,7 +882,7 @@ git config --global tag.gpgsign true        # Sign all tags automatically
 git commit -S -m "feat: signed commit"
 
 # Verify a commit's signature
-git log --show-signature -1
+git --no-pager log --show-signature -1
 
 # Export public key to add to GitHub/GitLab
 gpg --armor --export KEY_ID
@@ -982,9 +982,9 @@ git config user.name "Lab User"
 echo '# lab' > README.md
 git add README.md && git commit -m "docs: initial readme"
 echo 'more' >> README.md
-git diff
+git --no-pager diff
 git add README.md && git commit -m "docs: second line"
-git log --oneline --graph --all
+git --no-pager log --oneline --graph --all
 git status
 ```
 
@@ -1005,7 +1005,7 @@ echo 'port: 8080' > config.yaml && git add config.yaml && git commit -m "feat: a
 git switch main
 echo 'lab' >> README.md && git add README.md && git commit -m "docs: note"
 git merge --no-ff feature/add-config -m "merge: add config"
-git log --oneline --graph
+git --no-pager log --oneline --graph
 git branch -d feature/add-config
 git branch
 ```
@@ -1035,7 +1035,7 @@ git reset --hard HEAD^
 git merge left || true
 git add app.txt && git commit -m "merge: rerere"
 git status
-git log --oneline --graph
+git --no-pager log --oneline --graph
 ```
 
 **Expected:** `git status` is clean after the merge commit. `git log --oneline --graph` shows both parents.
@@ -1119,7 +1119,7 @@ echo 'after reset:' && cat file.txt
 git reflog
 git reset --hard 'HEAD@{1}'
 echo 'after restore:' && cat file.txt
-git log --oneline
+git --no-pager log --oneline
 ```
 
 **Expected:** After the hard reset, `file.txt` contains only `one`. After restoring `HEAD@{1}`, it contains `one` and `two`. `git log --oneline` shows both commits.

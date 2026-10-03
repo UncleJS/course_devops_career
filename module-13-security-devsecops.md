@@ -431,8 +431,8 @@ unzip vault_1.18.5_linux_amd64.zip && sudo mv vault /usr/local/bin/
 
 # Dev mode is in-memory and insecure — for learning only.
 # The root token is whatever the server prints, unless you set -dev-root-token-id.
-vault server -dev -dev-root-token-id=root
-# In another shell:
+vault server -dev -dev-root-token-id=root > /tmp/vault-dev.log 2>&1 &
+sleep 2
 export VAULT_ADDR='http://127.0.0.1:8200'
 export VAULT_TOKEN='root'
 
@@ -802,8 +802,8 @@ SCA identifies vulnerabilities in **third-party libraries and dependencies** (th
 
 ```bash
 # Install
-wget https://github.com/aquasecurity/trivy/releases/download/v0.51.0/trivy_0.51.0_Linux-64bit.tar.gz
-tar xvf trivy_0.51.0_Linux-64bit.tar.gz
+wget https://github.com/aquasecurity/trivy/releases/download/v0.58.0/trivy_0.58.0_Linux-64bit.tar.gz
+tar xvf trivy_0.58.0_Linux-64bit.tar.gz
 sudo mv trivy /usr/local/bin/
 
 # Scan a container image
@@ -990,7 +990,7 @@ wget https://github.com/sigstore/cosign/releases/download/v2.2.3/cosign-linux-am
 chmod +x cosign-linux-amd64 && sudo mv cosign-linux-amd64 /usr/local/bin/cosign
 
 # Generate a key pair
-cosign generate-key-pair
+COSIGN_PASSWORD=lab cosign generate-key-pair
 
 # Sign an image
 cosign sign --key cosign.key registry.example.com/myapp:1.2.3
@@ -1646,10 +1646,10 @@ helm upgrade falco falcosecurity/falco \
 
 ```bash
 # Manually trigger a Falco alert by spawning a shell in a container
-kubectl exec -it $(kubectl get pod -l app=api -o name | head -1) -- /bin/sh
+kubectl exec "$(kubectl get pod -l app=api -o name | head -1)" -- /bin/sh -c 'id'
 
-# In another terminal, watch Falco logs for the detection
-kubectl logs -n falco -l app.kubernetes.io/name=falco -f | grep "shell was spawned"
+# Watch a short slice of Falco logs for the detection
+kubectl logs -n falco -l app.kubernetes.io/name=falco --tail=50 | grep "shell was spawned" || true
 ```
 
 ### Falco in the CI/CD pipeline (falco-event-generator)
@@ -1659,7 +1659,7 @@ kubectl logs -n falco -l app.kubernetes.io/name=falco -f | grep "shell was spawn
 kubectl apply -f https://raw.githubusercontent.com/falcosecurity/event-generator/main/deployment/event-generator.yaml
 
 # It performs common attack patterns — Falco should fire alerts for all of them
-kubectl logs -n falco -l app.kubernetes.io/name=falco -f
+kubectl logs -n falco -l app.kubernetes.io/name=falco --tail=50
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1770,14 +1770,6 @@ trivy image python:3.8 --severity CRITICAL,HIGH
 
 # Compare with a newer version
 trivy image python:3.12-slim
-
-# Scan your own application image
-docker build -t myapp:lab .
-trivy image myapp:lab
-
-# Generate SBOM
-trivy image --format cyclonedx --output sbom.json myapp:lab
-cat sbom.json | jq '.components | length'  # Count dependencies
 ```
 
 **Expected:** `python:3.8` reports CRITICAL or HIGH findings. `python:3.12-slim` reports fewer. Skip the `myapp:lab` lines if you have not built an image yet.
@@ -1925,6 +1917,8 @@ spec:
         seccompProfile:
           type: RuntimeDefault
 EOF
+kubectl wait --for=condition=Ready pod/nonroot-test -n production --timeout=120s
+kubectl get pod nonroot-test -n production
 ```
 
 **Expected:** `root-test` is rejected. `nonroot-test` reaches Running.

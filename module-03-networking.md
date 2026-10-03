@@ -45,7 +45,7 @@ By the end of this module you will be able to:
 
 - Understand IP addressing, subnets, and CIDR notation
 - Explain DNS resolution and debug DNS problems
-- Identify common ports and protocols by number
+- Test whether a TCP port is open with `nc` and `ss`
 - Understand HTTP request/response cycles including status codes
 - Configure firewall rules with `ufw`
 - Configure HAProxy to balance three local HTTP servers
@@ -436,7 +436,7 @@ A firewall controls which network traffic is allowed to enter or leave a system.
 
 ```bash
 sudo ufw allow 22/tcp               # Allow SSH before enabling, or a remote VM locks you out
-sudo ufw enable                     # Enable firewall
+sudo ufw --force enable
 sudo ufw status verbose             # Show rules and status
 sudo ufw allow 80/tcp               # Allow HTTP
 sudo ufw allow 443/tcp              # Allow HTTPS
@@ -479,7 +479,7 @@ IFACE=$(ip -o -4 route show to default | awk '{print $5; exit}')
 sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/8 -o "$IFACE" -j MASQUERADE
 
 # Persist rules. The redirect must run as root, and the directory comes from iptables-persistent.
-sudo apt install iptables-persistent
+sudo apt install -y iptables-persistent
 sudo sh -c 'iptables-save > /etc/iptables/rules.v4'
 sudo sh -c 'iptables-restore < /etc/iptables/rules.v4'
 ```
@@ -1418,7 +1418,7 @@ sudo ip link set veth0 up
 sudo ip netns exec myns ip link set veth1 up
 
 # Test connectivity between host and namespace
-ping 10.0.0.2
+ping -c 4 10.0.0.2
 
 # Enable IP forwarding (for routing between namespaces)
 sudo sysctl -w net.ipv4.ip_forward=1
@@ -1689,7 +1689,7 @@ spec:
 
 ## Hands-On Labs
 
-**Prerequisites:** `sudo apt install dnsutils iproute2 netcat-openbsd tcpdump haproxy lsof`. Do these labs on the Ubuntu VM, not inside a container. Allow SSH before you enable ufw.
+**Prerequisites:** `sudo apt install -y dnsutils iproute2 netcat-openbsd tcpdump haproxy lsof`. Do these labs on the Ubuntu VM, not inside a container. Allow SSH before you enable ufw.
 
 ### Lab 3.1 — DNS Investigation
 
@@ -1736,7 +1736,7 @@ kill "$(lsof -ti:8080)" || true
 Run this on a VM you can reach from the console. Allow SSH before `ufw enable`.
 
 ```bash
-sudo apt install ufw
+sudo apt install -y ufw
 sudo ufw default deny incoming
 sudo ufw allow 80/tcp
 sudo ufw limit 22/tcp
@@ -1751,7 +1751,7 @@ nc -zv -w 3 localhost 8080 || true
 
 `ufw limit` must be the SSH rule. An earlier `ufw allow 22/tcp` would match first and the limit would never run. `ufw` allows the loopback interface, so `nc` to `localhost` does not test the firewall.
 
-**Expected:** Status is `active`. Rules include `22/tcp LIMIT` and `80/tcp ALLOW`. `nc -zv -w 3 <vm-address> 8080` times out. `nc -zv localhost 8080` is connection refused if nothing is listening, which is not a firewall drop.
+**Expected:** Status is `active`. Rules include `22/tcp LIMIT` and `80/tcp ALLOW`. `nc -zv -w 3 "$VM_IP" 8080` times out. `nc -zv localhost 8080` is connection refused if nothing is listening, which is not a firewall drop.
 
 **Cleanup:** `sudo ufw disable`
 

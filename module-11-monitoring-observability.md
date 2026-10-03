@@ -916,24 +916,21 @@ dnf install -y zabbix-server-mysql zabbix-web-mysql \
 # Install and configure MariaDB
 dnf install -y mariadb-server
 systemctl enable --now mariadb
-mysql_secure_installation
+sudo mysql -e 'CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;'
+sudo mysql -e 'CREATE USER "zabbix"@"localhost" IDENTIFIED BY "StrongPassword123!";'
+sudo mysql -e 'GRANT ALL PRIVILEGES ON zabbix.* TO "zabbix"@"localhost";'
+sudo mysql -e 'FLUSH PRIVILEGES;'
 ```
 
 ```sql
--- Create Zabbix database
-CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-CREATE USER 'zabbix'@'localhost' IDENTIFIED BY 'StrongPassword123!';
-GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';
-FLUSH PRIVILEGES;
+-- The bash block above creates the zabbix database and user.
 ```
 
 ```bash
 # Import initial schema
-zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix -p zabbix
-
-# Configure Zabbix server
-# Edit /etc/zabbix/zabbix_server.conf
-DBPassword=StrongPassword123!
+zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix -p'StrongPassword123!' zabbix
+sudo sed -i 's/^# DBPassword=/DBPassword=/' /etc/zabbix/zabbix_server.conf
+sudo sed -i 's/^DBPassword=.*/DBPassword=StrongPassword123!/' /etc/zabbix/zabbix_server.conf
 
 # Start services
 systemctl enable --now zabbix-server zabbix-agent httpd php-fpm
@@ -1841,7 +1838,7 @@ amtool silence query
 
 ```bash
 # Check Zabbix server log
-tail -f /var/log/zabbix/zabbix_server.log
+# tail -f /var/log/zabbix/zabbix_server.log
 
 # Test agent item locally
 zabbix_agent2 -t system.cpu.util
@@ -1849,10 +1846,10 @@ zabbix_agent2 -t vfs.fs.size[/,pfree]
 zabbix_agent2 -t net.if.in[eth0]
 
 # Test connectivity from server
-zabbix_get -s 192.168.1.20 -p 10050 -k "system.hostname"
+zabbix_get -s 127.0.0.1 -p 10050 -k "system.hostname"
 
 # Database check
-mysql -u zabbix -p zabbix -e "SELECT COUNT(*) FROM hosts WHERE status=0;"
+mysql -u zabbix -p'StrongPassword123!' zabbix -e 'SELECT COUNT(*) FROM hosts WHERE status=0;'
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -2059,13 +2056,13 @@ wget https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix
 sudo dpkg -i zabbix-release_latest_7.0+ubuntu24.04_all.deb
 sudo apt update
 sudo apt install -y zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf \
-  zabbix-sql-scripts zabbix-agent2 mariadb-server
+  zabbix-sql-scripts zabbix-agent2 zabbix-get mariadb-server
 sudo systemctl enable --now mariadb
 sudo mysql -e "CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;"
-sudo mysql -e "CREATE USER 'zabbix'@'localhost' IDENTIFIED BY 'StrongPassword123!';"
+sudo mysql -e 'CREATE USER "zabbix"@"localhost" IDENTIFIED BY "StrongPassword123!";'
 sudo mysql -e "GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';"
 sudo mysql -e "FLUSH PRIVILEGES;"
-zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix -pStrongPassword123! zabbix
+zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix -p'StrongPassword123!' zabbix
 sudo sed -i 's/^# DBPassword=/DBPassword=/' /etc/zabbix/zabbix_server.conf
 sudo sed -i 's/^DBPassword=.*/DBPassword=StrongPassword123!/' /etc/zabbix/zabbix_server.conf
 sudo systemctl enable --now zabbix-server zabbix-agent2 apache2
@@ -2138,6 +2135,8 @@ helm install monitoring prometheus-community/kube-prometheus-stack \
 
 # Check all pods are running
 kubectl -n monitoring get pods
+kubectl -n monitoring wait --for=condition=ready pod -l app.kubernetes.io/name=grafana --timeout=300s
+kubectl -n monitoring wait --for=condition=ready pod -l app.kubernetes.io/name=prometheus --timeout=300s
 
 # Port-forward Grafana
 kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80 &

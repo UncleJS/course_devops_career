@@ -169,7 +169,7 @@ This course is a concept foundation for the exams below. It does not replace the
 | **Ubuntu 24.04 VM** | Modules 1–15 | Default lab. VirtualBox, VMware, or a cloud VM with 2 CPU and 4 GB RAM. Give it 4 CPU and 8 GB RAM from module 6. |
 | **WSL2** | Modules 1–15 on Windows | Ubuntu 24.04. systemd is available in current WSL2. |
 | **Rocky Linux 9** | Comparison only | Use when a module shows a RHEL-family command (`dnf`, `wheel`). Not the default path. |
-| **kind or minikube** | Modules 6, 13, 14, and 15 | Local Kubernetes. About 4 CPU and 8 GB RAM. |
+| **kind or minikube** | Modules 6, 13, and 15 | Local Kubernetes. About 4 CPU and 8 GB RAM. Module 14 Lab 4 runs on a kubeadm control-plane node. |
 | **Ubuntu container** | Early shell practice only | `docker run -it ubuntu:24.04 bash` has no systemd and is missing most lab packages. It is not enough for firewalls, services, or Kubernetes. |
 
 Cloud labs in modules 7 and 8 need an AWS, Azure, or GCP account. Each of those labs includes a teardown. Do not leave billable resources running.

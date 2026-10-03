@@ -628,7 +628,7 @@ patronictl -c /etc/patroni/patroni.yml list
 patronictl -c /etc/patroni/patroni.yml failover my-postgres-cluster --leader pg-node-01 --candidate pg-node-02 --force
 
 # Switchover (planned maintenance)
-patronictl -c /etc/patroni/patroni.yml switchover my-postgres-cluster
+patronictl -c /etc/patroni/patroni.yml switchover my-postgres-cluster --force
 ```
 
 ### Redis Sentinel (HA for Redis)
@@ -998,14 +998,14 @@ For production Kubernetes, run **3 or 5 control plane nodes** (odd number for et
 ```bash
 # Backup etcd (run on control plane node)
 SNAP=/backup/etcd-snapshot.db
-ETCDCTL_API=3 etcdctl snapshot save "$SNAP" \
+sudo ETCDCTL_API=3 etcdctl snapshot save "$SNAP" \
   --endpoints=https://127.0.0.1:2379 \
   --cacert=/etc/kubernetes/pki/etcd/ca.crt \
   --cert=/etc/kubernetes/pki/etcd/server.crt \
   --key=/etc/kubernetes/pki/etcd/server.key
 
 # Verify snapshot
-ETCDCTL_API=3 etcdctl snapshot status "$SNAP" --write-out=table
+sudo ETCDCTL_API=3 etcdctl snapshot status "$SNAP" --write-out=table
 
 # kubeadm runs etcd as a static pod. Do not systemctl stop etcd.
 # Do not restore one member into a live 3-node cluster.
@@ -1016,8 +1016,8 @@ sudo mv /etc/kubernetes/manifests/kube-controller-manager.yaml /tmp/
 sudo mv /etc/kubernetes/manifests/kube-scheduler.yaml /tmp/
 sudo mv /etc/kubernetes/manifests/etcd.yaml /tmp/
 
-# Wait until the etcd container is gone.
-# snapshot restore refuses an existing data directory, so move it aside first.
+# Wait until etcd stops listening. snapshot restore refuses an existing data directory.
+until ! sudo ss -ltn | grep -q ':2379'; do sleep 2; done
 sudo mv /var/lib/etcd /var/lib/etcd.bak
 
 # Single-node lab: --force-new-cluster rewrites the restored member as a new cluster.
@@ -1442,11 +1442,10 @@ backend lab_servers
 EOF
 
 sudo haproxy -f /etc/haproxy/haproxy.cfg -c
-sudo systemctl restart haproxy
+sudo systemctl reload haproxy
 
-while true; do curl -s http://localhost/; sleep 0.5; done
-# Kill the process on 8001 and watch traffic move to 8002 and 8003.
-# Start that process again and watch it return to the pool.
+for i in $(seq 1 10); do curl -s http://localhost/; echo; done
+# Stop the process on 8001 and run the loop again to see traffic move to 8002 and 8003.
 ```
 
 **Expected:** responses rotate across "Server on port 8001", 8002, and 8003. After you stop 8001, only 8002 and 8003 remain.
@@ -1570,14 +1569,14 @@ kubectl create namespace backup-test
 kubectl create configmap test-data --from-literal=key=value -n backup-test
 
 # Backup etcd
-ETCDCTL_API=3 etcdctl snapshot save /tmp/etcd-backup.db \
+sudo ETCDCTL_API=3 etcdctl snapshot save /tmp/etcd-backup.db \
   --endpoints=https://127.0.0.1:2379 \
   --cacert=/etc/kubernetes/pki/etcd/ca.crt \
   --cert=/etc/kubernetes/pki/etcd/server.crt \
   --key=/etc/kubernetes/pki/etcd/server.key
 
 # Verify
-ETCDCTL_API=3 etcdctl snapshot status /tmp/etcd-backup.db --write-out=table
+sudo ETCDCTL_API=3 etcdctl snapshot status /tmp/etcd-backup.db --write-out=table
 
 # Delete the namespace
 kubectl delete namespace backup-test
@@ -1593,8 +1592,8 @@ sudo mv /etc/kubernetes/manifests/kube-controller-manager.yaml /tmp/
 sudo mv /etc/kubernetes/manifests/kube-scheduler.yaml /tmp/
 sudo mv /etc/kubernetes/manifests/etcd.yaml /tmp/
 
-# Wait until the etcd container is gone.
-# snapshot restore refuses an existing data directory, so move it aside first.
+# Wait until etcd stops listening. snapshot restore refuses an existing data directory.
+until ! sudo ss -ltn | grep -q ':2379'; do sleep 2; done
 sudo mv /var/lib/etcd /var/lib/etcd.bak
 
 sudo ETCDCTL_API=3 etcdctl snapshot restore /tmp/etcd-backup.db \
@@ -1610,6 +1609,7 @@ sudo mv /tmp/kube-controller-manager.yaml /etc/kubernetes/manifests/
 sudo mv /tmp/kube-scheduler.yaml /etc/kubernetes/manifests/
 
 # Verify the namespace returns
+until kubectl get --raw=/readyz >/dev/null 2>&1; do sleep 2; done
 kubectl get namespace backup-test
 ```
 

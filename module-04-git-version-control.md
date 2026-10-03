@@ -48,8 +48,8 @@ By the end of this module you will be able to:
 - Initialize repositories and make commits with meaningful messages
 - Use branches to develop features in isolation
 - Merge branches and resolve conflicts confidently
-- Push and pull code from remote repositories (GitHub, GitLab)
-- Use pull requests / merge requests for code review
+- Push and pull code from a remote repository on GitHub
+- Use a pull request for code review
 - Write a pre-commit hook and a commit-msg hook
 - Recover a commit with `git reflog`
 
@@ -722,7 +722,7 @@ repos:
 ```
 
 ```bash
-sudo apt install pre-commit
+sudo apt install -y pre-commit
 pre-commit install   # Install hooks from .pre-commit-config.yaml
 pre-commit run --all-files  # Run manually against all files
 ```
@@ -862,7 +862,7 @@ Signed commits prove that a commit was made by who it claims. GitHub/GitLab show
 
 ```bash
 # Generate a GPG key
-gpg --full-generate-key
+# gpg --full-generate-key   # Interactive. It stops a paste.
 # Choose: RSA and RSA, 4096 bits, doesn't expire (or set expiry)
 
 # List your keys
@@ -916,7 +916,7 @@ If you accidentally committed a secret:
 ```bash
 # 1. IMMEDIATELY revoke the leaked credential (before anything else)
 # 2. Remove from history. Ubuntu 24.04: apt, not system pip (PEP 668).
-sudo apt install git-filter-repo
+sudo apt install -y git-filter-repo
 # filter-repo deletes the origin remote so a rewritten history is not pushed by accident.
 git filter-repo --path secrets.txt --invert-paths
 git remote add origin git@github.com:user/repo.git
@@ -1031,6 +1031,7 @@ git reset --hard HEAD^
 git merge left || true
 git add app.txt && git commit -m "merge: rerere"
 git status
+git log --oneline --graph
 ```
 
 **Expected:** `git status` is clean after the merge commit. `git log --oneline --graph` shows both parents.
@@ -1110,8 +1111,11 @@ git config user.name "Lab User"
 echo one > file.txt && git add file.txt && git commit -m "first"
 echo two >> file.txt && git commit -am "second"
 git reset --hard HEAD~1
+echo 'after reset:' && cat file.txt
 git reflog
-git reset --hard HEAD@{1}
+git reset --hard 'HEAD@{1}'
+echo 'after restore:' && cat file.txt
+git log --oneline
 ```
 
 **Expected:** After the hard reset, `file.txt` contains only `one`. After restoring `HEAD@{1}`, it contains `one` and `two`. `git log --oneline` shows both commits.

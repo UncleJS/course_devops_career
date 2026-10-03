@@ -197,11 +197,10 @@ DB_HOST="${DATABASE_HOST:-localhost}"     # Use localhost if not set
 DB_PORT="${DATABASE_PORT:-5432}"          # Default to 5432
 : "${API_KEY:?ERROR: API_KEY must be set}"  # Abort if not set
 
-# Reading user input
-read -p "Enter your name: " USERNAME
-read -sp "Enter password: " PASSWORD      # -s = silent (no echo)
-echo ""                                   # newline after silent input
-echo "Welcome, $USERNAME!"
+# Reading user input. read consumes the rest of a paste.
+# read -p "Enter your name: " USERNAME
+# read -sp "Enter password: " PASSWORD
+echo "Welcome, student"
 
 # Special variables
 echo "Script name: $0"
@@ -683,9 +682,9 @@ awk 'NF > 0' file.txt                # Skip empty lines
 ### Installation
 
 ```bash
-sudo apt install jq      # Ubuntu/Debian
-sudo dnf install jq      # RHEL/Fedora
-brew install jq          # macOS
+sudo apt install -y jq
+# Rocky: sudo dnf install jq
+# macOS: brew install jq
 ```
 
 ### Basic Filtering
@@ -941,9 +940,10 @@ WantedBy=timers.target
 ```
 
 ```bash
-sudo systemctl enable --now backup.timer
-systemctl list-timers              # Show all timers and next run times
-journalctl -u backup.service       # View logs for the service
+# The unit files above are examples. Enable the timer only after you write them to /etc/systemd/system.
+# sudo systemctl enable --now backup.timer
+systemctl list-timers
+journalctl -u backup.service --no-pager -n 20 || true
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1034,18 +1034,15 @@ with urllib.request.urlopen('https://httpbin.org/get') as response:
     data = json.loads(response.read())
     print(data['origin'])
 
-# Using the requests library. On Ubuntu 24.04, install it in a venv:
+# Using the requests library. Install it in a venv before this block:
 #   python3 -m venv .venv && source .venv/bin/activate && python -m pip install requests
-import requests
-
-response = requests.get('https://api.github.com/repos/kubernetes/kubernetes')
-data = response.json()
-print(f"Stars: {data['stargazers_count']}")
-
-# POST request with JSON body
-payload = {'key': 'value'}
-response = requests.post('https://httpbin.org/post', json=payload)
-print(response.status_code)
+# import requests
+# response = requests.get('https://api.github.com/repos/kubernetes/kubernetes')
+# data = response.json()
+# print(f"Stars: {data['stargazers_count']}")
+# payload = {'key': 'value'}
+# response = requests.post('https://httpbin.org/post', json=payload)
+# print(response.status_code)
 ```
 
 ### Environment Variables
@@ -1064,8 +1061,13 @@ if 'DEBUG' in os.environ:
 
 ### YAML Processing (Common in DevOps)
 
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install pyyaml
+```
+
 ```python
-# python -m pip install pyyaml   # inside the venv from the note above
 import yaml
 
 # Read a YAML file (e.g., Kubernetes manifest, Compose file)
@@ -1477,7 +1479,7 @@ echo "Current log space: $(du -sh "$LOG_DIR" | cut -f1)"
 
 ## Hands-On Labs
 
-**Prerequisites:** Module 01 lab VM. `sudo apt install jq python3-venv`. Work in `~/labs/module-02`.
+**Prerequisites:** Module 01 lab VM. `sudo apt install -y jq python3-venv`. Work in `~/labs/module-02`.
 
 ### Lab 2.1 — Your First Bash Script
 

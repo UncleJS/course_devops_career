@@ -1238,6 +1238,7 @@ cat > secrets.yml <<'EOF'
 db_password: fake-db-password
 EOF
 ansible-vault encrypt --vault-password-file .vault-pass secrets.yml
+head -1 secrets.yml
 cat > templates/db.env.j2 <<'EOF'
 DB_PASSWORD={{ db_password }}
 EOF

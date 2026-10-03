@@ -161,11 +161,11 @@ whereis nginx                       # Locate binary, source, and man page
 
 ```bash
 cat file.txt            # Print entire file to screen
-less file.txt           # Page through a file (q to quit, / to search)
+# less file.txt         # Page through a file (q to quit, / to search)
 head -n 20 file.txt     # Show first 20 lines
 tail -n 20 file.txt     # Show last 20 lines
-tail -f /var/log/syslog # Follow a file in real time (great for logs)
-tail -F /var/log/syslog # Follow — keeps working even if file is rotated
+timeout 2 tail -f /var/log/syslog || true
+timeout 2 tail -F /var/log/syslog || true
 
 # Searching
 grep "error" file.txt           # Find lines containing "error"
@@ -322,8 +322,8 @@ setfacl -b file.txt
 
 `vim` is the most powerful terminal editor — essential for editing configs on remote servers.
 
-```bash
-vim file.txt        # Open file in vim
+```
+# vim file.txt        # Open file in vim. Keypresses below are not shell commands.
 
 # MODES:
 # Normal mode   — default, navigate and run commands
@@ -365,8 +365,8 @@ Ctrl+v then I   # Visual block insert (multi-line edit)
 
 `nano` is beginner-friendly — all shortcuts are shown at the bottom of the screen.
 
-```bash
-nano file.txt       # Open file in nano
+```
+# nano file.txt       # Open file in nano. Keypresses below are not shell commands.
 
 Ctrl+O              # Save (Write Out)
 Ctrl+X              # Exit
@@ -459,8 +459,8 @@ flowchart TD
 ps aux              # Show all running processes
 ps aux | grep nginx # Find specific process
 ps -eo pid,ppid,cmd,%cpu,%mem --sort=-%cpu  # Sort by CPU usage
-top                 # Interactive process viewer (q to quit)
-htop                # Enhanced process viewer (install separately)
+# top               # Interactive process viewer (q to quit)
+# htop              # Enhanced process viewer (install separately)
 pgrep nginx         # Find PIDs for processes named nginx
 pstree              # Show process tree
 
@@ -626,12 +626,12 @@ export HISTFILESIZE=20000
 
 ```bash
 sudo command            # Run command as root (superuser)
-sudo -i                 # Open a root shell session
-sudo -u bob command     # Run command as another user
-su username             # Switch to another user
-su -                    # Switch to root user (with root's environment)
-passwd                  # Change your own password
-sudo passwd username    # Change another user's password
+# sudo -i               # Open a root shell session
+sudo -u bob id          # Run a command as another user
+# su username           # Switch to another user
+# su -                  # Switch to root user (with root's environment)
+# passwd                # Change your own password
+# sudo passwd username  # Change another user's password
 
 # User management
 sudo useradd -m -s /bin/bash alice || true
@@ -653,7 +653,7 @@ cat /etc/group                  # List all groups
 getent passwd alice             # Look up user info
 
 # sudoers — fine-grained sudo control
-sudo visudo                     # Edit /etc/sudoers safely
+# sudo visudo                   # Edit /etc/sudoers safely
 # Allow alice to run these commands with any arguments:
 # Ubuntu: alice ALL=(ALL) /usr/bin/systemctl, /usr/bin/apt
 # Rocky:  alice ALL=(ALL) /usr/bin/systemctl, /usr/bin/dnf
@@ -666,7 +666,7 @@ sudo visudo                     # Edit /etc/sudoers safely
 ## Beginner: Network Commands
 
 ```bash
-ping google.com             # Test network connectivity
+ping -c 4 google.com        # Test network connectivity
 ping -c 4 192.168.1.1       # Send exactly 4 pings
 curl https://example.com    # Fetch a URL
 curl -I https://example.com # Fetch HTTP headers only
@@ -674,7 +674,7 @@ curl -o file.txt https://example.com/file  # Download and save
 curl -L https://example.com  # Follow redirects
 sudo apt install -y netcat-openbsd wget
 nc -zv example.com 80       # Test if port 80 is open (netcat)
-nc -l -p 8080               # Listen on port 8080
+# nc -l -p 8080             # Listen on port 8080. This does not return.
 ss -tulnp                   # Listening ports. netstat is not installed.
 ss -s                       # Socket statistics summary
 wget https://example.com/file.tar.gz   # Download a file
@@ -743,8 +743,8 @@ done
 # Archive logs older than 7 days
 find /var/log -name "*.log" -mtime +7 -exec gzip {} \;
 
-# Monitor a log file and alert on errors
-tail -f /var/log/app.log | grep --line-buffered "ERROR"
+# Monitor a log file and alert on errors. tail -f does not return.
+# timeout 2 tail -f /var/log/app.log | grep --line-buffered "ERROR"
 
 # Count HTTP status codes in access log
 awk '{print $9}' /var/log/nginx/access.log | sort | uniq -c | sort -rn
@@ -752,16 +752,14 @@ awk '{print $9}' /var/log/nginx/access.log | sort | uniq -c | sort -rn
 # Show top 10 largest files in a directory
 du -ah /var | sort -rh | head -10
 
-# Run a command on multiple servers
-for server in web01 web02 web03; do
-  echo "=== $server ==="; ssh $server uptime
-done
-
-# Check disk usage across servers and alert if over 80%
-for server in web01 web02 web03; do
-  usage=$(ssh $server "df / | tail -1 | awk '{print \$5}'" | tr -d '%')
-  [ "$usage" -gt 80 ] && echo "ALERT: $server disk at ${usage}%"
-done
+# SSH to other hosts hangs a paste. These loops are examples, not commands to run here.
+# for server in web01 web02 web03; do
+#   echo "=== $server ==="; ssh $server uptime
+# done
+# for server in web01 web02 web03; do
+#   usage=$(ssh $server "df / | tail -1 | awk '{print \$5}'" | tr -d '%')
+#   [ "$usage" -gt 80 ] && echo "ALERT: $server disk at ${usage}%"
+# done
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -773,11 +771,10 @@ done
 ```bash
 # Debian/Ubuntu (apt)
 sudo apt update                 # Update package index
-sudo apt upgrade                # Upgrade all packages
-sudo apt full-upgrade           # Upgrade, removing packages only if a dependency requires it
-sudo apt autoremove             # Remove packages that nothing depends on anymore
-sudo apt install nginx          # Install a package
-sudo apt install -y nginx       # Install without prompting
+sudo apt upgrade -y             # Upgrade all packages
+sudo apt full-upgrade -y        # Upgrade, removing packages only if a dependency requires it
+sudo apt autoremove -y          # Remove packages that nothing depends on anymore
+sudo apt install -y nginx       # Install a package
 sudo apt remove nginx           # Remove a package (keep config)
 sudo apt purge nginx            # Remove package and config files
 sudo apt autoremove             # Remove unused dependencies
@@ -791,18 +788,18 @@ apt-cache depends nginx         # Show package dependencies
 sudo apt-mark hold nginx
 sudo apt-mark unhold nginx
 
-# RHEL/Rocky Linux/CentOS (dnf/yum)
-sudo dnf update                 # Update all packages
-sudo dnf install nginx          # Install a package
-sudo dnf remove nginx           # Remove a package
-sudo dnf search nginx           # Search for a package
-sudo dnf info nginx             # Show package details
-sudo dnf list installed         # List all installed packages
-sudo dnf history                # Show transaction history
-sudo dnf history undo last      # Undo the last transaction
-rpm -qa | grep nginx            # List installed RPMs matching nginx
-rpm -ql nginx                   # List files installed by nginx RPM
-rpm -qf /usr/bin/nginx          # Which package owns this file?
+# RHEL/Rocky Linux 9 (dnf/yum). These are not Ubuntu commands.
+# sudo dnf update
+# sudo dnf install nginx
+# sudo dnf remove nginx
+# sudo dnf search nginx
+# sudo dnf info nginx
+# sudo dnf list installed
+# sudo dnf history
+# sudo dnf history undo last
+# rpm -qa | grep nginx
+# rpm -ql nginx
+# rpm -qf /usr/bin/nginx
 
 # Snap (cross-distro)
 sudo snap install code --classic   # Install VS Code
@@ -1104,16 +1101,17 @@ uptime          # 1, 5, 15 minute load averages
 nproc           # Number of CPU cores available
 lscpu           # Detailed CPU info
 
-# Real-time CPU monitoring
-top             # press 1 to show per-core stats
-htop            # Interactive, color-coded
-mpstat -P ALL 1 # Per-CPU stats every 1 second (sysstat package)
-sar -u 1 5      # CPU utilization, 5 samples every 1 second
+# Real-time CPU monitoring. top and htop do not return.
+sudo apt install -y sysstat
+# top
+# htop
+mpstat -P ALL 1 1
+sar -u 1 5
 
 # CPU-intensive process profiling
-pidstat -u 1    # Per-process CPU usage
-perf top        # Real-time perf analysis (requires kernel headers)
-strace -p 1234  # Trace system calls for PID 1234
+pidstat -u 1 1
+# perf top
+# strace -p 1234
 ```
 
 ### Memory Performance
@@ -1223,7 +1221,7 @@ blkid /dev/sdb1
 # Format: <device> <mountpoint> <type> <options> <dump> <pass>
 # UUID=abc-123 /mnt/data ext4 defaults 0 2
 sudo blkid /dev/sdb1   # Get UUID
-sudo vim /etc/fstab
+# sudo vim /etc/fstab
 sudo mount -a           # Apply all fstab entries without rebooting
 
 # Filesystem health
@@ -1331,7 +1329,7 @@ EOF
 # Test the syntax, then reload. The settings belong in sshd_config, not in the shell.
 sudo sshd -t
 sudo systemctl reload ssh      # Ubuntu unit name
-sudo systemctl reload sshd     # Rocky unit name
+# Rocky: sudo systemctl reload sshd
 ```
 
 ```
@@ -1354,12 +1352,12 @@ Banner /etc/ssh/banner.txt      # Show legal notice before login
 
 ```bash
 # Install
-sudo apt install fail2ban   # Ubuntu
-sudo dnf install fail2ban   # RHEL/Fedora
+sudo apt install -y fail2ban
+# Rocky: sudo dnf install fail2ban
 
 # Configure
 sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
-sudo vim /etc/fail2ban/jail.local
+# sudo vim /etc/fail2ban/jail.local
 
 # Example jail config:
 # [sshd]
@@ -1381,7 +1379,7 @@ sudo fail2ban-client set sshd unbanip 1.2.3.4   # Unban an IP
 
 ```bash
 # auditd — kernel-level audit logging
-sudo apt install auditd
+sudo apt install -y auditd
 sudo systemctl enable --now auditd
 
 # Define rules — what to audit
@@ -1390,7 +1388,7 @@ sudo auditctl -w /etc/sudoers -p wa -k sudoers_changes
 sudo auditctl -a always,exit -F arch=b64 -S execve -k commands  # Log all commands
 
 # Persist rules
-sudo vim /etc/audit/rules.d/custom.rules
+# sudo vim /etc/audit/rules.d/custom.rules
 
 # View audit log
 sudo ausearch -k passwd_changes
@@ -1446,7 +1444,7 @@ sudo aureport -a                 # All events
 
 ## Hands-On Labs
 
-**Prerequisites:** Ubuntu 24.04 VM or WSL2. For Lab 1.2 install ACL support: `sudo apt install acl`. For Lab 1.7: `sudo apt install sysstat`.
+**Prerequisites:** Ubuntu 24.04 VM or WSL2. For Lab 1.2 install ACL support: `sudo apt install -y acl`. For Lab 1.7: `sudo apt install -y sysstat`.
 
 ### Lab 1.1 — Filesystem Exploration
 
@@ -1477,7 +1475,7 @@ printf '%s\n' '#!/bin/bash' 'echo "Hello DevOps!"' > test.sh
 7. Create a local user and grant read via ACL:
 
 ```bash
-sudo apt install acl
+sudo apt install -y acl
 sudo useradd -m bob || true
 setfacl -m u:bob:r test.sh
 getfacl test.sh
@@ -1494,7 +1492,7 @@ getfacl test.sh
 3. Check memory: `free -h`
 4. Start a background process: `sleep 300 &`
 5. Find its PID: `ps aux | grep sleep`
-6. Kill it: `kill <PID>`
+6. Kill it: `kill "$(pgrep -n sleep)"`
 7. Check CPU and memory stats: `vmstat 1 5`
 
 **Expected:** On a VM, PID 1's command is `/sbin/init`. WSL without systemd shows its own init as PID 1. `free -h` prints `Mem:` and `Swap:` lines. After `kill`, `ps aux | grep sleep` no longer shows the `sleep 300` process.
@@ -1553,7 +1551,7 @@ type ports
 
 ### Lab 1.7 — Performance Investigation
 
-1. Install the tools: `sudo apt install sysstat`
+1. Install the tools: `sudo apt install -y sysstat`
 2. Run `uptime` and compare the load average with `nproc`
 3. Run `vmstat 1 5` and find the `si` and `so` columns (swap in and swap out)
 4. Find the top 5 memory-consuming processes: `ps aux --sort=-%mem | head -6`

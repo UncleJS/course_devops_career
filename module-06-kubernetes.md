@@ -322,28 +322,28 @@ kubectl get pods -o wide                   # With IP and node info
 kubectl get all                            # Pods, deployments, services
 
 # Describe (detailed info + events)
-kubectl describe pod <pod-name>
-kubectl describe deployment <name>
-kubectl describe node <node-name>
+kubectl describe pod nginx-pod
+kubectl describe deployment nginx
+kubectl describe node "$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')"
 
 # Apply / Delete
 kubectl apply -f manifest.yaml             # Create or update
 kubectl delete -f manifest.yaml            # Delete from file
-kubectl delete pod <pod-name>              # Delete by name
-kubectl delete pods --all                  # Delete all pods
+kubectl delete pod nginx-pod
+kubectl delete pods --all
 
-# Logs
-kubectl logs <pod-name>                    # Pod logs
-kubectl logs -f <pod-name>                 # Follow logs
-kubectl logs <pod-name> -c <container>     # Specific container in pod
+# Logs. -f does not return, so it stays commented.
+kubectl logs nginx-pod
+# kubectl logs -f nginx-pod
+kubectl logs nginx-pod -c nginx
 
-# Exec into a pod
-kubectl exec -it <pod-name> -- bash
-kubectl exec -it <pod-name> -- sh          # If no bash available
+# Exec into a pod. -it is its own command.
+# kubectl exec -it nginx-pod -- bash
+# kubectl exec -it nginx-pod -- sh
 
-# Port forwarding (development/debugging)
-kubectl port-forward pod/<pod-name> 8080:80
-kubectl port-forward service/<svc-name> 8080:80
+# Port forwarding. This stays in the foreground, so run it in its own terminal.
+# kubectl port-forward pod/nginx-pod 8080:80
+# kubectl port-forward service/nginx 8080:80
 
 # Namespace management
 kubectl create namespace staging
@@ -547,15 +547,10 @@ spec:
       targetPort: 3000
 ```
 
-**Service DNS** — every Service gets a DNS name inside the cluster:
+**Service DNS** — every Service gets a DNS name inside the cluster: `<service-name>.<namespace>.svc.cluster.local`. Pods in the same namespace can use the short name.
 
-```
-<service-name>.<namespace>.svc.cluster.local
-# Example: api-service.production.svc.cluster.local
-
-# Pods in the same namespace can use just the service name:
+```bash
 curl http://api-service/
-# Cross-namespace:
 curl http://api-service.production/
 ```
 
@@ -1258,14 +1253,11 @@ spec:
 kubectl get networkpolicy -n production
 
 # Test connectivity from a debug pod
-kubectl run test --image=curlimages/curl -n production --rm -it -- \
-  curl http://api-svc:3000/health          # Should succeed
+kubectl run test --image=curlimages/curl -n production --rm --restart=Never -- \
+  curl http://api-svc:3000/health
 
-kubectl run test --image=curlimages/curl -n production --rm -it -- \
-  curl http://database-svc:5432            # Should time out (blocked)
-
-# Check Cilium policy (if using Cilium CNI)
-kubectl exec -n kube-system cilium-xxxxx -- cilium policy get
+kubectl run test --image=curlimages/curl -n production --rm --restart=Never -- \
+  curl http://database-svc:5432 || true
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1696,7 +1688,7 @@ spec:
 EOF
 kubectl apply -f cpu-burner.yaml
 kubectl rollout status deployment/cpu-burner
-until kubectl top pods -l app=cpu-burner 2>/dev/null | grep -q cpu-burner; do
+until kubectl top pods -l app=cpu-burner 2>/dev/null | grep -E '[0-9]+m'; do
   sleep 5
 done
 kubectl top pods -l app=cpu-burner

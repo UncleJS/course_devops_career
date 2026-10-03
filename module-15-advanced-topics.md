@@ -1428,6 +1428,7 @@ Chaos Mesh is a CNCF project that injects faults directly into Kubernetes using 
 # Install Chaos Mesh
 helm repo add chaos-mesh https://charts.chaos-mesh.org
 helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh \
+  --version 2.7.0 \
   --namespace chaos-mesh \
   --create-namespace \
   --set chaosDaemon.runtime=containerd \
@@ -1904,16 +1905,16 @@ flux check
 ### Istio
 
 ```bash
-istioctl install --set profile=default
+istioctl install --set profile=default -y
 istioctl verify-install
 istioctl analyze -n production
 POD=$(kubectl get pod -n production -o jsonpath='{.items[0].metadata.name}')
 istioctl proxy-config clusters "$POD" -n production
 istioctl proxy-config routes "$POD" -n production
 istioctl proxy-config secret "$POD" -n production
-istioctl x authz check "$POD" -n production          # authorization check, not mTLS
-istioctl dashboard kiali
-istioctl dashboard jaeger
+istioctl x authz check "$POD" -n production
+# istioctl dashboard kiali
+# istioctl dashboard jaeger
 ```
 
 ### Linkerd
@@ -1986,7 +1987,10 @@ kubectl rollout status deployment/guestbook-ui --timeout=180s
 **Goal**: Install Istio, deploy two versions of a service, and split traffic 90/10.
 
 ```bash
-# Install Istio
+# Current stable. The script prints the directory it created. Do not pin a retired release.
+curl -L https://istio.io/downloadIstio | sh -
+cd "$(ls -d istio-* | head -1)"
+export PATH="$PWD/bin:$PATH"
 istioctl install --set profile=demo -y
 kubectl label namespace default istio-injection=enabled
 
@@ -2205,14 +2209,19 @@ Install Argo CD 3.1.0 with the Lab 1 commands, including `argocd login`. Lab 1 a
 GHCR packages are private by default. Either make `capstone-api` public, or create a docker-registry secret. The Deployment above sets `imagePullSecrets` to `ghcr-pull`. If you make the package public, omit `imagePullSecrets` from `k8s/deployment.yaml`.
 
 ```bash
-kubectl create secret docker-registry ghcr-pull \
-  --docker-server=ghcr.io \
-  --docker-username=YOUR_GITHUB_USER \
-  --docker-password="$GHCR_TOKEN" \
-  --namespace=default
+: "${GITHUB_USER:?Set GITHUB_USER to your GitHub login before this lab}"
+if [ -n "${GHCR_TOKEN:-}" ]; then
+  kubectl create secret docker-registry ghcr-pull \
+    --docker-server=ghcr.io \
+    --docker-username="$GITHUB_USER" \
+    --docker-password="$GHCR_TOKEN" \
+    --namespace=default
+else
+  echo "GHCR_TOKEN is unset. Make the package public and omit imagePullSecrets."
+fi
 
 mkdir -p argocd
-cat > argocd/application.yaml << 'EOF'
+cat > argocd/application.yaml << EOF
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -2221,7 +2230,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/YOUR_GITHUB_USER/devops-capstone.git
+    repoURL: https://github.com/${GITHUB_USER}/devops-capstone.git
     path: k8s
     targetRevision: main
   destination:
@@ -2233,8 +2242,10 @@ spec:
       selfHeal: true
 EOF
 
+sed -i "s#YOUR_GITHUB_USER#${GITHUB_USER}#g" k8s/deployment.yaml
 kubectl apply -f argocd/application.yaml
 argocd app sync capstone-api
+argocd app get capstone-api
 kubectl port-forward svc/capstone-api 8081:8080 >/tmp/capstone-port-forward.log 2>&1 &
 until bash -c 'echo >/dev/tcp/127.0.0.1/8081' >/dev/null 2>&1; do
   sleep 1

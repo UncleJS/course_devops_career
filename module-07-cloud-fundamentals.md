@@ -528,21 +528,29 @@ gcloud sql users create admin --instance=mydb --password="${DB_PASSWORD}"   # Ne
 ### AWS CLI Setup
 
 ```bash
-# Install
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+# Install. Pick the zip that matches this machine. Ubuntu 24.04 does not ship unzip.
+sudo apt install -y unzip
+case "$(uname -m)" in
+  aarch64|arm64) AWS_ARCH=aarch64 ;;
+  *) AWS_ARCH=x86_64 ;;
+esac
+curl "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" -o "awscliv2.zip"
 unzip awscliv2.zip && sudo ./aws/install
+```
 
-# Configure
+```bash
+# Configure. This prompt reads the next lines of a paste, so it stays in its own fence.
 aws configure
-# Prompts for: Access Key ID, Secret Access Key, Region, Output format
+```
 
+```bash
 # Test
 aws sts get-caller-identity
 
-# Use named profiles
-aws configure --profile production
-aws s3 ls --profile production
-export AWS_PROFILE=production
+# Use named profiles. aws configure --profile is also a prompt, so it stays commented.
+# aws configure --profile production
+# aws s3 ls --profile production
+# export AWS_PROFILE=production
 ```
 
 ### Azure CLI Setup
@@ -1071,6 +1079,7 @@ AMI_ID=$(aws ec2 describe-images \
             "Name=state,Values=available" \
   --query 'sort_by(Images, &CreationDate)[-1].ImageId' \
   --output text)
+echo "$AMI_ID"
 
 aws ec2 create-key-pair --key-name lab07-key --query 'KeyMaterial' --output text > lab07-key.pem
 chmod 400 lab07-key.pem

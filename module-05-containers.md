@@ -143,8 +143,12 @@ All containers share the **same host kernel** — this is why they're lightweigh
 > **Key Insight**: Podman's CLI is intentionally compatible with Docker. In most cases, you can replace `docker` with `podman` in a command and it works identically.
 
 ```bash
-# These are equivalent:
+# Interactive. Run this on its own so it does not swallow the next command.
 docker run -it ubuntu:24.04 bash
+```
+
+```bash
+# Same with Podman:
 podman run -it ubuntu:24.04 bash
 ```
 
@@ -265,9 +269,9 @@ podman image inspect nginx:1.25
 
 ```bash
 # Run a container — Docker and Podman share the same flags
-docker run nginx                     # Run in foreground (blocking)
+# docker run nginx                 # Foreground. This blocks the rest of a paste.
 docker run -d nginx                  # Run detached (background)
-docker run -it ubuntu:24.04 bash     # Interactive with terminal
+# docker run -it ubuntu:24.04 bash  # Interactive. Run it in its own terminal.
 docker run --name webserver nginx    # Give it a name
 docker run -p 8080:80 nginx          # Map host port 8080 → container port 80
 docker run -p 127.0.0.1:8080:80 nginx  # Bind to localhost only
@@ -292,17 +296,23 @@ docker restart webserver            # Stop + start
 docker rm webserver                 # Remove a stopped container
 docker rm -f webserver              # Force remove (even if running)
 docker logs webserver               # View container logs
-docker logs -f webserver            # Follow logs in real time
-docker exec -it webserver bash      # Open shell in running container
+# docker logs -f webserver          # Follow logs. This does not return.
+# docker exec -it webserver bash    # Open a shell. Run it in its own terminal.
 docker inspect webserver            # Full container metadata
 
 # Podman (identical):
 podman ps
 podman ps -a
 podman stop webserver
-podman logs -f webserver
-podman exec -it webserver bash
+# podman logs -f webserver
+# podman exec -it webserver bash
 podman inspect webserver
+```
+
+```bash
+# Interactive shells. Each is its own command.
+docker exec -it webserver bash
+podman exec -it webserver bash
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1685,7 +1695,7 @@ systemctl --user enable frontend
 loginctl enable-linger $USER
 
 # View aggregated logs
-journalctl --user -u frontend -u api -u redis -f
+journalctl --user -u frontend -u api -u redis -n 50 --no-pager
 
 # Check health status
 podman healthcheck run api
@@ -1867,6 +1877,7 @@ EOF
 systemctl --user daemon-reload
 systemctl --user cat nginx-quadlet.service
 systemctl --user start nginx-quadlet.service
+until curl -sf -o /dev/null http://localhost:8081; do sleep 1; done
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081
 journalctl --user -u nginx-quadlet.service -n 20 --no-pager
 systemctl --user enable nginx-quadlet.service

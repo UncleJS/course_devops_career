@@ -1639,20 +1639,20 @@ receivers:
 
 ```bash
 # Cluster status
-curl -s http://localhost:9200/_cluster/health?pretty
+curl -s 'http://localhost:9200/_cluster/health?pretty'
 
 # Node info
-curl -s http://localhost:9200/_nodes/stats?pretty | jq '.nodes | to_entries[] | {name: .value.name, heap_used: .value.jvm.mem.heap_used_percent}'
+curl -s 'http://localhost:9200/_nodes/stats?pretty' | jq '.nodes | to_entries[] | {name: .value.name, heap_used: .value.jvm.mem.heap_used_percent}'
 
 # Index stats
-curl -s http://localhost:9200/_cat/indices?v&h=index,docs.count,store.size&s=store.size:desc
+curl -s 'http://localhost:9200/_cat/indices?v&h=index,docs.count,store.size&s=store.size:desc'
 
 # Delete old index
-curl -X DELETE http://localhost:9200/app-logs-2025.12.*
+curl -X DELETE 'http://localhost:9200/app-logs-2025.12.*'
 
 # ILM status
-curl -s http://localhost:9200/_ilm/status
-curl -s http://localhost:9200/.ds-app-logs*/_ilm/explain?pretty
+curl -s 'http://localhost:9200/_ilm/status'
+curl -s 'http://localhost:9200/.ds-app-logs*/_ilm/explain?pretty'
 ```
 
 ### Logstash
@@ -1752,7 +1752,7 @@ Open Grafana at `http://localhost:3000` (admin / admin123). The datasource file 
 
 **Goal**: Write a Python app that emits structured JSON logs and ship them to Loki.
 
-Save the chapter `JSONFormatter` class and `get_logger` function as `json_logger.py`. That logger writes JSON to stdout. Create `/var/log/app` and append the process output to `/var/log/app/app.log`, which the chapter Promtail config tails (`__path__: /var/log/app/*.log`).
+Save the chapter `JSONFormatter` class and `get_logger` function as `json_logger.py`. That logger writes JSON to stdout. From the Lab 1 directory, start the stack first: `cd loki-lab && docker compose up -d`. Create `/var/log/app` and append the process output to `/var/log/app/app.log`, which the chapter Promtail config tails (`__path__: /var/log/app/*.log`).
 
 ```python
 # json_logger.py — JSONFormatter and get_logger from Structured logging in Python
@@ -1851,11 +1851,11 @@ mkdir -p ~/elk-lab && cd ~/elk-lab
 sudo sysctl -w vm.max_map_count=262144
 mkdir -p logstash/pipeline logstash/config filebeat
 docker compose up -d
+until curl -sf http://localhost:9200 >/dev/null; do sleep 2; done
 
-# Host-side curl. The Elasticsearch image healthcheck does not use curl.
-curl -s http://localhost:9200/_cluster/health?pretty
+curl -s 'http://localhost:9200/_cluster/health?pretty'
 
-curl -s -X POST http://localhost:9200/app-logs-lab/_doc \
+curl -s -X POST 'http://localhost:9200/app-logs-lab/_doc' \
   -H 'Content-Type: application/json' \
   -d '{"message":"lab event","service":"lab","level":"info"}'
 

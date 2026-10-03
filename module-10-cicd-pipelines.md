@@ -1338,7 +1338,7 @@ jobs:
           path: coverage/
 ```
 
-Save `package.json`, `test.js`, and `Dockerfile` at the repository root, then push. Open the Actions tab. Change `test.js` so the assertion fails, push again, and watch that run fail.
+Save `package.json`, `package-lock.json`, `test.js`, `Dockerfile`, and `.github/workflows/ci.yml` at the repository root, then push. Open the Actions tab. Change `test.js` so the assertion fails, push again, and watch that run fail.
 
 **Expected:** The first run is green. The run after the failing test is red, and the test step is the one marked failed.
 
@@ -1455,7 +1455,7 @@ deploy-staging:
     - echo "deploy $DOCKER_IMAGE"
 ```
 
-**Expected:** The pipeline graph shows the three stages in order. The job log prints `[masked]` where the variable value would have appeared.
+**Expected:** The pipeline graph shows the three stages in order. The job log prints `[MASKED]` where the variable value would have appeared.
 
 **Cleanup:** Delete the GitLab project if you created it only for this lab.
 
@@ -1586,7 +1586,7 @@ kubectl patch service myapp --type merge -p '{"spec":{"selector":{"app":"myapp",
 kubectl get endpoints myapp
 ```
 
-**Expected:** Before the patch, `myapp` endpoints are the blue pods (`color=blue`, `version=1`). After the patch, the same Service name selects the green pods (`color=green`, `version=2`). Both Deployments stay ready through the flip, so existing clients keep a backend while the selector moves.
+**Expected:** Before the patch, `kubectl get endpoints myapp` lists addresses of the pods `kubectl get pods -l app=myapp,color=blue` shows. After the patch, those addresses match the pods labeled `color=green` and `version=2`. Both Deployments stay ready through the flip, so existing clients keep a backend while the selector moves.
 
 **Cleanup:** `kubectl delete -f blue-green.yaml`
 

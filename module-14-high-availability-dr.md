@@ -3,7 +3,7 @@
 > **Course**: DevOps Career Path  
 > **Audience**: Beginner → Intermediate
 
-[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 14 of 15](https://img.shields.io/badge/module-14%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Advanced-red) ![MySQL 8.4+](https://img.shields.io/badge/MySQL-8.4%2B-4479A1?logo=mysql&logoColor=white) ![HAProxy 3.1+](https://img.shields.io/badge/HAProxy-3.1%2B-106DA9) ![Keepalived 2.3+](https://img.shields.io/badge/Keepalived-2.3%2B-grey) ![Replication · Failover](https://img.shields.io/badge/patterns-Replication%20%C2%B7%20Failover-blue)
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 14 of 15](https://img.shields.io/badge/module-14%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Advanced-red) ![MySQL 8.4+](https://img.shields.io/badge/MySQL-8.4%2B-4479A1?logo=mysql&logoColor=white) ![HAProxy 2.8](https://img.shields.io/badge/HAProxy-2.8-106DA9) ![Keepalived 2.2](https://img.shields.io/badge/Keepalived-2.2-grey) ![Replication · Failover](https://img.shields.io/badge/patterns-Replication%20%C2%B7%20Failover-blue)
 
 **Prerequisites:** Modules 03 (Networking), 05 (Containers), and 06 (Kubernetes).
 
@@ -404,7 +404,7 @@ echo "set server web_backend/web-01 state ready" | socat stdio /run/haproxy/admi
 
 ### Keepalived — Virtual IP failover (VRRP)
 
-```bash
+```
 # /etc/keepalived/keepalived.conf — on PRIMARY (MASTER)
 vrrp_script chk_haproxy {
     script "killall -0 haproxy"   # Check if HAProxy is running
@@ -506,7 +506,8 @@ CHANGE REPLICATION SOURCE TO
     SOURCE_USER='replicator',
     SOURCE_PASSWORD='ReplPassword123!',
     SOURCE_LOG_FILE='mysql-bin.000001',  -- File from SHOW BINARY LOG STATUS
-    SOURCE_LOG_POS=154;                   -- Position from SHOW BINARY LOG STATUS
+    SOURCE_LOG_POS=154,                  -- Position from SHOW BINARY LOG STATUS
+    GET_SOURCE_PUBLIC_KEY=1;             -- MySQL 8.4 caching_sha2_password
 START REPLICA;
 ```
 
@@ -537,7 +538,7 @@ bind-address=0.0.0.0
 
 # Galera Provider
 wsrep_on=ON
-wsrep_provider=/usr/lib/galera/libgalera_smm.so
+wsrep_provider=/usr/lib/x86_64-linux-gnu/galera/libgalera_smm.so
 
 # Cluster name and members
 wsrep_cluster_name="my_galera_cluster"
@@ -624,7 +625,7 @@ postgresql:
 patronictl -c /etc/patroni/patroni.yml list
 
 # Manual failover
-patronictl -c /etc/patroni/patroni.yml failover my-postgres-cluster --master pg-node-01 --candidate pg-node-02 --force
+patronictl -c /etc/patroni/patroni.yml failover my-postgres-cluster --leader pg-node-01 --candidate pg-node-02 --force
 
 # Switchover (planned maintenance)
 patronictl -c /etc/patroni/patroni.yml switchover my-postgres-cluster
@@ -751,18 +752,19 @@ echo "Backup complete: ${DATE}"
 
 ```bash
 # Full backup (no table locks — safe for production)
+TARGET=/backup/mysql/full/$(date +%Y%m%d)
 xtrabackup --backup \
   --user=backup_user \
   --password=BackupPassword123! \
-  --target-dir=/backup/mysql/full/$(date +%Y%m%d)
+  --target-dir="$TARGET"
 
 # Prepare (apply transaction logs)
-xtrabackup --prepare --target-dir=/backup/mysql/full/20260302
+xtrabackup --prepare --target-dir="$TARGET"
 
 # Restore
 systemctl stop mysql
 rm -rf /var/lib/mysql/*
-xtrabackup --copy-back --target-dir=/backup/mysql/full/20260302
+xtrabackup --copy-back --target-dir="$TARGET"
 chown -R mysql:mysql /var/lib/mysql
 systemctl start mysql
 ```
@@ -908,8 +910,8 @@ Region A                            Region B
 # Health-check the primary IP (52.1.2.3) or a regional name such as
 # api-us-east-1.example.com. Do not check the failover name api.example.com.
 # Attach the health check only to the PRIMARY record below.
-aws route53 create-health-check \
-  --caller-reference "primary-check-001" \
+HC_ID=$(aws route53 create-health-check \
+  --caller-reference "primary-check-$(date +%s)" \
   --health-check-config '{
     "IPAddress": "52.1.2.3",
     "Port": 443,
@@ -917,25 +919,29 @@ aws route53 create-health-check \
     "ResourcePath": "/health",
     "RequestInterval": 30,
     "FailureThreshold": 3
-  }'
+  }' \
+  --query 'HealthCheck.Id' --output text)
 
 # Create PRIMARY record (us-east-1)
 aws route53 change-resource-record-sets \
   --hosted-zone-id Z123456789 \
-  --change-batch '{
-    "Changes": [{
-      "Action": "CREATE",
-      "ResourceRecordSet": {
-        "Name": "api.example.com",
-        "Type": "A",
-        "SetIdentifier": "primary",
-        "Failover": "PRIMARY",
-        "TTL": 60,
-        "ResourceRecords": [{"Value": "52.1.2.3"}],
-        "HealthCheckId": "<health-check-id>"
-      }
-    }]
-  }'
+  --change-batch "$(cat <<EOF
+{
+  "Changes": [{
+    "Action": "CREATE",
+    "ResourceRecordSet": {
+      "Name": "api.example.com",
+      "Type": "A",
+      "SetIdentifier": "primary",
+      "Failover": "PRIMARY",
+      "TTL": 60,
+      "ResourceRecords": [{"Value": "52.1.2.3"}],
+      "HealthCheckId": "${HC_ID}"
+    }
+  }]
+}
+EOF
+)"
 
 # Create SECONDARY record (eu-west-1)
 aws route53 change-resource-record-sets \
@@ -991,30 +997,31 @@ For production Kubernetes, run **3 or 5 control plane nodes** (odd number for et
 
 ```bash
 # Backup etcd (run on control plane node)
-ETCDCTL_API=3 etcdctl snapshot save /backup/etcd-$(date +%Y%m%d_%H%M%S).db \
+SNAP=/backup/etcd-snapshot.db
+ETCDCTL_API=3 etcdctl snapshot save "$SNAP" \
   --endpoints=https://127.0.0.1:2379 \
   --cacert=/etc/kubernetes/pki/etcd/ca.crt \
   --cert=/etc/kubernetes/pki/etcd/server.crt \
   --key=/etc/kubernetes/pki/etcd/server.key
 
 # Verify snapshot
-ETCDCTL_API=3 etcdctl snapshot status /backup/etcd-20260302_140000.db --write-out=table
+ETCDCTL_API=3 etcdctl snapshot status "$SNAP" --write-out=table
 
 # kubeadm runs etcd as a static pod. Do not systemctl stop etcd.
 # Do not restore one member into a live 3-node cluster.
 # Stop the other control-plane members first. On a single-node lab there are no other members;
 # the warning still applies: this procedure replaces the whole etcd data directory.
-mv /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/
-mv /etc/kubernetes/manifests/kube-controller-manager.yaml /tmp/
-mv /etc/kubernetes/manifests/kube-scheduler.yaml /tmp/
-mv /etc/kubernetes/manifests/etcd.yaml /tmp/
+sudo mv /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/
+sudo mv /etc/kubernetes/manifests/kube-controller-manager.yaml /tmp/
+sudo mv /etc/kubernetes/manifests/kube-scheduler.yaml /tmp/
+sudo mv /etc/kubernetes/manifests/etcd.yaml /tmp/
 
 # Wait until the etcd container is gone.
 # snapshot restore refuses an existing data directory, so move it aside first.
-mv /var/lib/etcd /var/lib/etcd.bak
+sudo mv /var/lib/etcd /var/lib/etcd.bak
 
 # Single-node lab: --force-new-cluster rewrites the restored member as a new cluster.
-ETCDCTL_API=3 etcdctl snapshot restore /backup/etcd-20260302_140000.db \
+sudo ETCDCTL_API=3 etcdctl snapshot restore "$SNAP" \
   --data-dir=/var/lib/etcd \
   --name=cp-01 \
   --initial-cluster="cp-01=https://192.168.1.10:2380" \
@@ -1022,10 +1029,10 @@ ETCDCTL_API=3 etcdctl snapshot restore /backup/etcd-20260302_140000.db \
   --force-new-cluster
 
 # Put the static pod manifests back. kubelet starts API server and etcd.
-mv /tmp/etcd.yaml /etc/kubernetes/manifests/
-mv /tmp/kube-apiserver.yaml /etc/kubernetes/manifests/
-mv /tmp/kube-controller-manager.yaml /etc/kubernetes/manifests/
-mv /tmp/kube-scheduler.yaml /etc/kubernetes/manifests/
+sudo mv /tmp/etcd.yaml /etc/kubernetes/manifests/
+sudo mv /tmp/kube-apiserver.yaml /etc/kubernetes/manifests/
+sudo mv /tmp/kube-controller-manager.yaml /etc/kubernetes/manifests/
+sudo mv /tmp/kube-scheduler.yaml /etc/kubernetes/manifests/
 ```
 
 ### Pod Disruption Budgets (PDB)
@@ -1372,14 +1379,15 @@ ETCDCTL_API=3 etcdctl snapshot status snapshot.db
 
 # Velero
 velero backup get
-velero backup describe <name>
-velero restore create --from-backup <name>
+velero backup describe BACKUP_NAME
+velero restore create --from-backup BACKUP_NAME
 velero schedule get
 
 # Kubernetes HA
 kubectl get nodes -o wide
-kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
-kubectl uncordon <node>
+NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+kubectl drain "$NODE" --ignore-daemonsets --delete-emptydir-data
+kubectl uncordon "$NODE"
 kubectl get pdb -A
 kubectl get poddisruptionbudget -n production
 ```
@@ -1488,7 +1496,8 @@ CHANGE REPLICATION SOURCE TO
   SOURCE_USER='replicator',
   SOURCE_PASSWORD='ReplPassword123!',
   SOURCE_LOG_FILE='${LOG_FILE}',
-  SOURCE_LOG_POS=${LOG_POS};
+  SOURCE_LOG_POS=${LOG_POS},
+  GET_SOURCE_PUBLIC_KEY=1;
 START REPLICA;
 "
 wait
@@ -1520,8 +1529,9 @@ SELECT * FROM lab.t;
 ### Lab 3 — Kubernetes PodDisruptionBudget (Intermediate)
 
 ```bash
-# Deploy an app with 3 replicas
+# Deploy an app with 3 replicas and wait until they are Ready
 kubectl create deployment lab-app --image=nginx:alpine --replicas=3 -n default
+kubectl rollout status deployment/lab-app
 
 # Create a PDB allowing max 1 unavailable
 kubectl apply -f - << 'EOF'
@@ -1529,6 +1539,7 @@ apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: lab-app-pdb
+  namespace: default
 spec:
   maxUnavailable: 1
   selector:
@@ -1536,11 +1547,10 @@ spec:
       app: lab-app
 EOF
 
-# Try to drain a node
-kubectl drain <node-name> --ignore-daemonsets --delete-emptydir-data
-# Observe: it waits until evictions are compliant with PDB
-
-# Check PDB status
+# A drain of the only node stalls. Delete one pod and confirm the budget.
+POD=$(kubectl get pod -l app=lab-app -o jsonpath='{.items[0].metadata.name}')
+kubectl delete pod "$POD"
+kubectl rollout status deployment/lab-app
 kubectl get pdb lab-app-pdb
 ```
 
@@ -1572,28 +1582,32 @@ ETCDCTL_API=3 etcdctl snapshot status /tmp/etcd-backup.db --write-out=table
 # Delete the namespace
 kubectl delete namespace backup-test
 
+# Read the live member name and peer URL before the manifest is moved.
+ETCD_NAME=$(sudo grep -oE -- '--name=[^ ]+' /etc/kubernetes/manifests/etcd.yaml | head -1 | cut -d= -f2)
+PEER=$(sudo grep -oE -- '--initial-advertise-peer-urls=[^ ]+' /etc/kubernetes/manifests/etcd.yaml | head -1 | cut -d= -f2-)
+
 # Single-node lab only. Do not restore one member into a live 3-node cluster.
 # kubeadm runs etcd as a static pod. Move the manifests aside so kubelet stops etcd.
-mv /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/
-mv /etc/kubernetes/manifests/kube-controller-manager.yaml /tmp/
-mv /etc/kubernetes/manifests/kube-scheduler.yaml /tmp/
-mv /etc/kubernetes/manifests/etcd.yaml /tmp/
+sudo mv /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/
+sudo mv /etc/kubernetes/manifests/kube-controller-manager.yaml /tmp/
+sudo mv /etc/kubernetes/manifests/kube-scheduler.yaml /tmp/
+sudo mv /etc/kubernetes/manifests/etcd.yaml /tmp/
 
 # Wait until the etcd container is gone.
 # snapshot restore refuses an existing data directory, so move it aside first.
-mv /var/lib/etcd /var/lib/etcd.bak
+sudo mv /var/lib/etcd /var/lib/etcd.bak
 
-ETCDCTL_API=3 etcdctl snapshot restore /tmp/etcd-backup.db \
+sudo ETCDCTL_API=3 etcdctl snapshot restore /tmp/etcd-backup.db \
   --data-dir=/var/lib/etcd \
-  --name=cp-01 \
-  --initial-cluster="cp-01=https://192.168.1.10:2380" \
-  --initial-advertise-peer-urls=https://192.168.1.10:2380 \
+  --name="$ETCD_NAME" \
+  --initial-cluster="${ETCD_NAME}=${PEER}" \
+  --initial-advertise-peer-urls="$PEER" \
   --force-new-cluster
 
-mv /tmp/etcd.yaml /etc/kubernetes/manifests/
-mv /tmp/kube-apiserver.yaml /etc/kubernetes/manifests/
-mv /tmp/kube-controller-manager.yaml /etc/kubernetes/manifests/
-mv /tmp/kube-scheduler.yaml /etc/kubernetes/manifests/
+sudo mv /tmp/etcd.yaml /etc/kubernetes/manifests/
+sudo mv /tmp/kube-apiserver.yaml /etc/kubernetes/manifests/
+sudo mv /tmp/kube-controller-manager.yaml /etc/kubernetes/manifests/
+sudo mv /tmp/kube-scheduler.yaml /etc/kubernetes/manifests/
 
 # Verify the namespace returns
 kubectl get namespace backup-test

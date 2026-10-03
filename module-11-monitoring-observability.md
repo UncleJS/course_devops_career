@@ -582,11 +582,11 @@ systemctl enable --now grafana-server
 
 ```bash
 # Ubuntu/Debian — dearmored key, no apt-key
-install -d -m 0755 /etc/apt/keyrings
-wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
-echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | tee /etc/apt/sources.list.d/grafana.list
-apt-get update && apt-get install grafana -y
-systemctl enable --now grafana-server
+sudo install -d -m 0755 /etc/apt/keyrings
+wget -q -O - https://apt.grafana.com/gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
+echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+sudo apt-get update && sudo apt-get install grafana -y
+sudo systemctl enable --now grafana-server
 ```
 
 #### Provision data sources via YAML (GitOps-friendly)
@@ -599,7 +599,7 @@ datasources:
   - name: Prometheus
     type: prometheus
     access: proxy
-    url: http://prometheus:9090
+    url: http://127.0.0.1:9090
     isDefault: true
     editable: false
     jsonData:
@@ -611,13 +611,13 @@ datasources:
   - name: Loki
     type: loki
     access: proxy
-    url: http://loki:3100
+    url: http://127.0.0.1:3100
     editable: false
 
   - name: Alertmanager
     type: alertmanager
     access: proxy
-    url: http://alertmanager:9093
+    url: http://127.0.0.1:9093
     jsonData:
       implementation: prometheus
 ```
@@ -899,7 +899,9 @@ That makes Zabbix a useful complement to the Prometheus worldview rather than me
 
 ### Zabbix Installation & Initial Setup
 
-#### Install Zabbix 7.0 on RHEL/CentOS
+#### Install Zabbix 7.0 on Rocky 9
+
+Lab 3 uses the Ubuntu 24.04 deb packages. This block is the Rocky 9 server install.
 
 ```bash
 # Install Zabbix 7.0 repository
@@ -1644,9 +1646,13 @@ node -r ./tracing.js app.js
 ### Instrumenting a Python (FastAPI) Service
 
 ```bash
-pip install opentelemetry-sdk \
+sudo apt install -y python3-venv
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install opentelemetry-sdk \
             opentelemetry-instrumentation-fastapi \
-            opentelemetry-exporter-otlp
+            opentelemetry-exporter-otlp \
+            fastapi
 ```
 
 ```python
@@ -1696,8 +1702,8 @@ processors:
         action: insert
 
 exporters:
-  jaeger:
-    endpoint: jaeger:14250
+  otlp:
+    endpoint: jaeger:4317
     tls:
       insecure: true
 
@@ -1710,24 +1716,24 @@ service:
     traces:
       receivers: [otlp]
       processors: [resource, batch]
-      exporters: [jaeger]
+      exporters: [otlp]
     metrics:
       receivers: [otlp]
       processors: [batch]
       exporters: [prometheus]
 ```
 
-The config above uses a Jaeger exporter. The `otel/opentelemetry-collector` image does not include that exporter. Use `otel/opentelemetry-collector-contrib`, or replace the Jaeger exporter with an OTLP exporter aimed at Jaeger on port 4317.
+The traces pipeline exports OTLP to Jaeger on port 4317. Both containers join the `otel` network so the collector can resolve `jaeger`.
 
 ```bash
-# Jaeger UI is 16686. Collector gRPC is 14250.
-docker run -d --name jaeger \
+docker network create otel
+docker run -d --name jaeger --network otel \
   -p 16686:16686 \
-  -p 14250:14250 \
+  -p 4317:4317 \
   jaegertracing/all-in-one:latest
 
-docker run -d --name otel-collector \
-  -p 4317:4317 -p 4318:4318 \
+docker run -d --name otel-collector --network otel \
+  -p 4318:4318 \
   -v $(pwd)/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml \
   otel/opentelemetry-collector-contrib:latest
 ```
@@ -2025,17 +2031,17 @@ topk(3, (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100)
 # 7. Five-minute rate of context switches
 rate(node_context_switches_total[5m])
 
-# 8. Disk full within 4 hours
-predict_linear(node_filesystem_avail_bytes{mountpoint="/"}[1h], 4 * 3600) < 0
+# 8. Disk free space, four hours ahead
+predict_linear(node_filesystem_avail_bytes{mountpoint="/"}[1h], 4 * 3600)
 
-# 9. Targets that are down
-up == 0
+# 9. Target up metric
+up
 
 # 10. Node uptime in days
 (node_time_seconds - node_boot_time_seconds) / 86400
 ```
 
-**Expected:** each query returns a series from the Lab 1 node exporter. Query 8 uses `predict_linear(node_filesystem_avail_bytes[1h], 4*3600)`.
+**Expected:** queries 1–7 and 9–10 return a series from the Lab 1 node exporter. Query 8 returns the predicted free-byte value. Query 9 is `up`, which is `1` while the target is healthy.
 
 **Cleanup:** none beyond Lab 1. `docker compose down -v` removes the stack.
 
@@ -2045,63 +2051,36 @@ up == 0
 
 **Goal**: Install the Zabbix 7.0 server from this chapter, then install Zabbix agent 2 on a monitored host and link `Linux by Zabbix agent 2`.
 
-Start with the chapter server install on the Zabbix server:
+Start with this Ubuntu 24.04 server install. The chapter's `rpm`/`dnf` block is for Rocky 9.
 
 ```bash
-# Install Zabbix 7.0 repository
-rpm -Uvh https://repo.zabbix.com/zabbix/7.0/rhel/9/x86_64/zabbix-release-latest-7.0.el9.noarch.rpm
-dnf clean all
-
-# Install Zabbix server, frontend, and agent
-dnf install -y zabbix-server-mysql zabbix-web-mysql \
-               zabbix-apache-conf zabbix-sql-scripts \
-               zabbix-selinux-policy zabbix-agent
-
-# Install and configure MariaDB
-dnf install -y mariadb-server
-systemctl enable --now mariadb
-mysql_secure_installation
+sudo apt install -y wget
+wget https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.0+ubuntu24.04_all.deb
+sudo dpkg -i zabbix-release_latest_7.0+ubuntu24.04_all.deb
+sudo apt update
+sudo apt install -y zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf \
+  zabbix-sql-scripts zabbix-agent2 mariadb-server
+sudo systemctl enable --now mariadb
+sudo mysql -e "CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;"
+sudo mysql -e "CREATE USER 'zabbix'@'localhost' IDENTIFIED BY 'StrongPassword123!';"
+sudo mysql -e "GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';"
+sudo mysql -e "FLUSH PRIVILEGES;"
+zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix -pStrongPassword123! zabbix
+sudo sed -i 's/^# DBPassword=/DBPassword=/' /etc/zabbix/zabbix_server.conf
+sudo sed -i 's/^DBPassword=.*/DBPassword=StrongPassword123!/' /etc/zabbix/zabbix_server.conf
+sudo systemctl enable --now zabbix-server zabbix-agent2 apache2
 ```
 
-```sql
--- Create Zabbix database
-CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-CREATE USER 'zabbix'@'localhost' IDENTIFIED BY 'StrongPassword123!';
-GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';
-FLUSH PRIVILEGES;
-```
+Web setup is `http://<server>/zabbix`. Default credentials are Admin / zabbix. Change them immediately.
+
+The template in this lab is `Linux by Zabbix agent 2`. On the same VM, point agent 2 at localhost:
 
 ```bash
-# Import initial schema
-zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix -p zabbix
-
-# Configure Zabbix server
-# Edit /etc/zabbix/zabbix_server.conf
-DBPassword=StrongPassword123!
-
-# Start services
-systemctl enable --now zabbix-server zabbix-agent httpd php-fpm
-
-# Web setup: http://<server>/zabbix
-# Default credentials: Admin / zabbix  (CHANGE IMMEDIATELY)
-```
-
-The template in this lab is `Linux by Zabbix agent 2`, so the monitored host installs and starts `zabbix-agent2`, not `zabbix-agent`.
-
-```bash
-# On the monitored host:
-rpm -Uvh https://repo.zabbix.com/zabbix/7.0/rhel/9/x86_64/zabbix-release-latest-7.0.el9.noarch.rpm
-dnf install -y zabbix-agent2
-
-# Edit /etc/zabbix/zabbix_agent2.conf
-Server=<zabbix_server_ip>
-ServerActive=<zabbix_server_ip>
-Hostname=lab-host-01
-
-systemctl enable --now zabbix-agent2
-
-# Test from Zabbix server:
-zabbix_get -s <monitored_host_ip> -p 10050 -k "system.hostname"
+sudo sed -i 's/^Server=.*/Server=127.0.0.1/' /etc/zabbix/zabbix_agent2.conf
+sudo sed -i 's/^ServerActive=.*/ServerActive=127.0.0.1/' /etc/zabbix/zabbix_agent2.conf
+sudo sed -i 's/^Hostname=.*/Hostname=lab-host-01/' /etc/zabbix/zabbix_agent2.conf
+sudo systemctl restart zabbix-agent2
+zabbix_get -s 127.0.0.1 -p 10050 -k "system.hostname"
 ```
 
 **In the Zabbix UI**:
@@ -2132,7 +2111,7 @@ zabbix_get -s <monitored_host_ip> -p 10050 -k "system.hostname"
 4. Create a **trigger action**:
    - Condition: Trigger severity >= High
    - Operation: Send message via the built-in Slack media type to Admin
-5. Install and run stress: `sudo apt install -y stress` then `stress --cpu 4 --timeout 120`
+5. Install and run stress: `sudo apt install -y stress` then `stress --cpu "$(nproc)" --timeout 120`
 6. Observe alert in Monitoring → Problems and Slack notification
 
 **Expected:** a High severity problem appears for `lab-host-01` while `stress` runs.
@@ -2147,7 +2126,7 @@ zabbix_get -s <monitored_host_ip> -p 10050 -k "system.hostname"
 
 ```bash
 # Start Minikube with enough resources
-minikube start --cpus=4 --memory=8192
+minikube start --cpus=4 --memory=4096
 
 # Install kube-prometheus-stack
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -2164,7 +2143,7 @@ kubectl -n monitoring get pods
 kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80 &
 
 # Port-forward Prometheus
-kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090 &
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-stack-prometheus 9090:9090 &
 
 # Open http://localhost:3000 (admin/admin123)
 # Explore pre-built dashboards: Kubernetes / Compute Resources / Cluster

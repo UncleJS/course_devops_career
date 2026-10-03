@@ -632,6 +632,8 @@ Filebeat is popular because it does one job with relatively low overhead: collec
 #### `filebeat.yml`
 
 ```yaml
+strict.perms: false
+
 filebeat.inputs:
   # Application JSON logs. filestream replaces the deprecated type: log.
   - type: filestream
@@ -664,7 +666,7 @@ processors:
       when.not.contains.tags: forwarded
   - add_docker_metadata: ~
   - add_kubernetes_metadata:
-      host: ${NODE_NAME}
+      host: "${NODE_NAME:localhost}"
       matchers:
         - logs_path:
             logs_path: "/var/log/containers/"
@@ -1835,6 +1837,8 @@ sum by(service) (rate({job="app", level="error"}[5m]))
 
 **Goal**: Start the Elasticsearch, Logstash, Kibana, and Filebeat services from the compose file in this module, and search a document you index yourself. That compose file does not run Nginx.
 
+Work in a new directory so this lab does not reuse the Loki compose file. Save the Full ELK Deployment compose as `~/elk-lab/docker-compose.yml`.
+
 Save the chapter pipeline as `logstash/pipeline/logstash.conf` and the chapter Filebeat config as `filebeat/filebeat.yml`. Those paths match the compose bind mounts `./logstash/pipeline` and `./filebeat/filebeat.yml`. Also save this `logstash/config/logstash.yml` (the compose file mounts it at `/usr/share/logstash/config/logstash.yml`):
 
 ```yaml
@@ -1843,6 +1847,7 @@ http.host: 0.0.0.0
 ```
 
 ```bash
+mkdir -p ~/elk-lab && cd ~/elk-lab
 sudo sysctl -w vm.max_map_count=262144
 mkdir -p logstash/pipeline logstash/config filebeat
 docker compose up -d

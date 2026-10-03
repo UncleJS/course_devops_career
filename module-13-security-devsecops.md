@@ -423,10 +423,11 @@ flowchart LR
 
 ```bash
 # Install Vault 1.18.x (matches the module badge) and verify the checksum
+sudo apt-get install -y unzip
 wget https://releases.hashicorp.com/vault/1.18.5/vault_1.18.5_linux_amd64.zip
 wget https://releases.hashicorp.com/vault/1.18.5/vault_1.18.5_SHA256SUMS
 sha256sum -c vault_1.18.5_SHA256SUMS --ignore-missing
-unzip vault_1.18.5_linux_amd64.zip && mv vault /usr/local/bin/
+unzip vault_1.18.5_linux_amd64.zip && sudo mv vault /usr/local/bin/
 
 # Dev mode is in-memory and insecure — for learning only.
 # The root token is whatever the server prints, unless you set -dev-root-token-id.
@@ -599,6 +600,9 @@ SAST analyzes source code **without executing it** to find security vulnerabilit
 
 ```bash
 # Install
+sudo apt-get install -y pipx
+pipx ensurepath
+export PATH="$HOME/.local/bin:$PATH"
 pipx install semgrep
 
 # Run with OWASP ruleset
@@ -629,8 +633,11 @@ semgrep --config=p/owasp-top-ten --sarif ./src > results.sarif
 ### Bandit — Python security linter
 
 ```bash
-# Install
-pip install bandit
+# Install. Ubuntu 24.04 refuses a system pip install.
+sudo apt-get install -y pipx
+pipx ensurepath
+export PATH="$HOME/.local/bin:$PATH"
+pipx install bandit
 
 # -l needs a level. -ll reports medium and higher.
 bandit -r ./src -ll
@@ -797,7 +804,7 @@ SCA identifies vulnerabilities in **third-party libraries and dependencies** (th
 # Install
 wget https://github.com/aquasecurity/trivy/releases/download/v0.51.0/trivy_0.51.0_Linux-64bit.tar.gz
 tar xvf trivy_0.51.0_Linux-64bit.tar.gz
-mv trivy /usr/local/bin/
+sudo mv trivy /usr/local/bin/
 
 # Scan a container image
 trivy image nginx:latest
@@ -932,7 +939,13 @@ metadata:
   name: my-api
   namespace: production
 spec:
+  selector:
+    matchLabels:
+      app: my-api
   template:
+    metadata:
+      labels:
+        app: my-api
     spec:
       # ✅ Non-root user
       securityContext:
@@ -974,7 +987,7 @@ spec:
 ```bash
 # Install Cosign
 wget https://github.com/sigstore/cosign/releases/download/v2.2.3/cosign-linux-amd64
-chmod +x cosign-linux-amd64 && mv cosign-linux-amd64 /usr/local/bin/cosign
+chmod +x cosign-linux-amd64 && sudo mv cosign-linux-amd64 /usr/local/bin/cosign
 
 # Generate a key pair
 cosign generate-key-pair
@@ -1230,19 +1243,15 @@ spec:
 ### Firewall rules on Linux (firewalld)
 
 ```bash
-# Allow specific port
-firewall-cmd --permanent --add-port=443/tcp
-firewall-cmd --permanent --add-port=9100/tcp   # node_exporter (monitoring only)
-firewall-cmd --reload
-
-# Allow source IP range
-firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.0.0.0/8" port port="22" protocol="tcp" accept'
-
-# Drop everything else
-firewall-cmd --set-default-zone=drop
-
-# List rules
-firewall-cmd --list-all
+# Ubuntu 24.04 does not ship firewalld.
+sudo apt-get install -y firewalld
+sudo systemctl enable --now firewalld
+sudo firewall-cmd --permanent --add-port=443/tcp
+sudo firewall-cmd --permanent --add-port=9100/tcp   # node_exporter (monitoring only)
+sudo firewall-cmd --reload
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.0.0.0/8" port port="22" protocol="tcp" accept'
+sudo firewall-cmd --set-default-zone=drop
+sudo firewall-cmd --list-all
 ```
 
 ### TLS best practices
@@ -1370,10 +1379,9 @@ docker run --rm --net host --pid host \
 ### Pre-commit hooks — prevent secrets from being committed
 
 ```bash
-# Install pre-commit
-pip install pre-commit
-
-# .pre-commit-config.yaml
+# Install pre-commit. The apt package matches Ubuntu 24.04; system pip does not.
+sudo apt install -y pre-commit
+cat > .pre-commit-config.yaml << 'EOF'
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.18.2
@@ -1392,6 +1400,7 @@ repos:
     hooks:
       - id: checkov
         args: ['--framework', 'dockerfile', '--framework', 'kubernetes']
+EOF
 ```
 
 ```bash
@@ -1739,7 +1748,7 @@ vault policy write myapp-readonly readonly.hcl
 vault token create -policy=myapp-readonly
 
 # Try to write with the new token (should fail)
-export VAULT_TOKEN=<new-token>
+export VAULT_TOKEN="$(vault token create -policy=myapp-readonly -field=token)"
 vault kv put secret/myapp/api api_key="new_key"  # Permission denied
 vault kv list secret/myapp/                      # allowed: list is on metadata
 ```
@@ -1828,8 +1837,8 @@ kubectl auth can-i delete pods \
 # Install Gatekeeper
 kubectl apply -f https://raw.githubusercontent.com/open-policy-agent/gatekeeper/v3.15.0/deploy/gatekeeper.yaml
 kubectl create namespace production
+kubectl -n gatekeeper-system rollout status deployment/gatekeeper-controller-manager --timeout=180s
 
-# ConstraintTemplate and Constraint from this chapter, before any test pod
 kubectl apply -f - << 'EOF'
 apiVersion: templates.gatekeeper.sh/v1
 kind: ConstraintTemplate
@@ -1856,7 +1865,11 @@ spec:
           not container.securityContext.runAsNonRoot
           msg := sprintf("Init container '%v' must set runAsNonRoot=true", [container.name])
         }
----
+EOF
+until kubectl get crd requirerunasnonroot.constraints.gatekeeper.sh >/dev/null 2>&1; do
+  sleep 3
+done
+kubectl apply -f - << 'EOF'
 apiVersion: constraints.gatekeeper.sh/v1beta1
 kind: RequireRunAsNonRoot
 metadata:

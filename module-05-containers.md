@@ -1127,13 +1127,14 @@ Restart=always
 [Unit]
 Description=My Application
 After=redis.service
+Requires=redis.service
 
 [Container]
 Image=ghcr.io/uncleJS/myapp:1.0
 Network=appnet.network
 PublishPort=3000:3000
 Environment=REDIS_URL=redis://redis:6379
-HealthCmd=curl -f http://localhost:3000/health || exit 1
+HealthCmd=/bin/sh -c "curl -f http://localhost:3000/health || exit 1"
 HealthInterval=30s
 HealthRetries=3
 
@@ -1149,8 +1150,8 @@ WantedBy=default.target
 systemctl --user daemon-reload
 systemctl --user cat myapp.service
 
-# Start in dependency order
-systemctl --user start myapp   # starts redis first (After=redis.service)
+# Requires= pulls redis in. After= only orders units that are already starting.
+systemctl --user start myapp
 ```
 
 ##### Key Quadlet directives reference
@@ -1570,9 +1571,9 @@ After=network-online.target
 Image=docker.io/library/redis:7-alpine
 Network=prod.network
 Volume=redis-data:/data:Z
-Exec=redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+Exec=/bin/sh -c 'exec redis-server --appendonly yes --requirepass "$REDIS_PASSWORD"'
 EnvironmentFile=%h/.config/containers/systemd/myapp.env
-HealthCmd=redis-cli -a ${REDIS_PASSWORD} ping
+HealthCmd=/bin/sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'
 HealthInterval=15s
 HealthRetries=3
 Label=app=myapp
@@ -1598,7 +1599,7 @@ Network=prod.network
 PublishPort=127.0.0.1:3000:3000
 EnvironmentFile=%h/.config/containers/systemd/myapp.env
 Secret=db-password,target=/run/secrets/db-password
-HealthCmd=curl -sf http://localhost:3000/health || exit 1
+HealthCmd=/bin/sh -c "curl -sf http://localhost:3000/health || exit 1"
 HealthInterval=20s
 HealthRetries=3
 AutoUpdate=registry
@@ -1627,7 +1628,7 @@ Image=ghcr.io/uncleJs/myapp-frontend:1.0
 Network=prod.network
 PublishPort=8080:80
 Volume=%h/conf/nginx.conf:/etc/nginx/nginx.conf:ro,Z
-HealthCmd=curl -sf http://localhost/ || exit 1
+HealthCmd=/bin/sh -c "curl -sf http://localhost/ || exit 1"
 HealthInterval=30s
 AutoUpdate=registry
 Label=app=myapp
@@ -1665,7 +1666,13 @@ systemctl --user cat redis.service
 systemctl --user cat api.service
 systemctl --user cat frontend.service
 
-# Start (systemd resolves dependency order automatically)
+# Create the secret and nginx config before daemon-reload, or frontend fails to start.
+# The env file is Step 5. Do not replace it here.
+mkdir -p ~/conf
+printf 'changeme_in_production' | podman secret create db-password - || true
+printf 'events {}\nhttp { server { listen 80; location / { return 200 "ok\\n"; } } }\n' > ~/conf/nginx.conf
+
+# Start (Requires= pulls api and redis in)
 systemctl --user start frontend
 
 # Verify

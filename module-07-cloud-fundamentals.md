@@ -72,7 +72,7 @@ By the end of this module you will be able to:
 
 - Launch an EC2 instance and wait until the status checks pass
 - Create an S3 bucket and copy an object into it
-- Attach an IAM role that an EC2 instance can use
+- Create an IAM user that can list S3 buckets and cannot create one
 - Create an RDS PostgreSQL instance and connect with `psql`
 - Deploy an AWS Lambda function URL
 - Push an image to ECR
@@ -292,13 +292,16 @@ aws s3 rm s3://my-bucket/file.txt
 aws s3 presign s3://my-bucket/file.txt --expires-in 300
 aws s3 rb s3://my-bucket --force
 
-# Azure Blob Storage
+# Azure Blob Storage. The account name must be globally unique: 3–24 lowercase letters and numbers.
 az storage account create --name mystorageaccount --resource-group myRG --location eastus --sku Standard_LRS
 az role assignment create \
   --role "Storage Blob Data Contributor" \
   --assignee "$(az account show --query user.name --output tsv)" \
   --scope "$(az storage account show --name mystorageaccount --resource-group myRG --query id --output tsv)"
-az storage container create --name mycontainer --account-name mystorageaccount --auth-mode login
+# Data-plane RBAC can take a minute. Retry the first data-plane call until it succeeds.
+until az storage container create --name mycontainer --account-name mystorageaccount --auth-mode login; do
+  sleep 15
+done
 az storage blob upload --file ./file.txt --container-name mycontainer --name file.txt --account-name mystorageaccount --auth-mode login
 az storage blob list --container-name mycontainer --account-name mystorageaccount --auth-mode login --output table
 
@@ -477,14 +480,19 @@ Cloud-managed databases eliminate the overhead of installation, patching, backup
 # Query available 16.x versions, then pass the major version. A pinned minor may already be withdrawn.
 aws rds describe-db-engine-versions \
   --engine postgres \
-  --query 'DBEngineVersions[?starts_with(EngineVersion, `16.`)].EngineVersion' \
+  --query 'DBEngineVersions[?starts_with(EngineVersion, `16.`) && Status==`available`].EngineVersion | [-1]' \
   --output text
+
+ENGINE_VERSION=$(aws rds describe-db-engine-versions \
+  --engine postgres \
+  --query 'DBEngineVersions[?starts_with(EngineVersion, `16.`) && Status==`available`].EngineVersion | [-1]' \
+  --output text)
 
 aws rds create-db-instance \
   --db-instance-identifier mydb \
   --db-instance-class db.t3.micro \
   --engine postgres \
-  --engine-version 16 \
+  --engine-version "$ENGINE_VERSION" \
   --master-username admin \
   --master-user-password "${DB_PASSWORD}" \
   --allocated-storage 20 \
@@ -1203,7 +1211,7 @@ Pass PostgreSQL 16.x. Install the client, set `ENGINE_VERSION` from the offered 
 sudo apt install -y postgresql-client
 ENGINE_VERSION=$(aws rds describe-db-engine-versions \
   --engine postgres \
-  --query 'sort(DBEngineVersions[?starts_with(EngineVersion, `16.`)].EngineVersion)[-1]' \
+  --query 'DBEngineVersions[?starts_with(EngineVersion, `16.`) && Status==`available`].EngineVersion | [-1]' \
   --output text)
 
 export DB_PASSWORD='Lab07-ChangeMe-1'
@@ -1270,14 +1278,16 @@ def lambda_handler(event, context):
         "body": json.dumps({"message": f"Hello, {name}!"})
     }
 EOF
+sudo apt install -y zip
 zip function.zip handler.py
-sleep 10
-aws lambda create-function \
+until aws lambda create-function \
   --function-name lab07-hello \
   --runtime python3.12 \
   --role "$ROLE_ARN" \
   --handler handler.lambda_handler \
-  --zip-file fileb://function.zip
+  --zip-file fileb://function.zip; do
+  sleep 10
+done
 aws lambda wait function-active --function-name lab07-hello
 aws lambda create-function-url-config --function-name lab07-hello --auth-type NONE
 aws lambda add-permission \
@@ -1288,7 +1298,10 @@ aws lambda add-permission \
   --function-url-auth-type NONE
 FUNCTION_URL=$(aws lambda get-function-url-config --function-name lab07-hello --query FunctionUrl --output text)
 curl -fsS "${FUNCTION_URL}?name=DevOps"
-aws logs tail /aws/lambda/lab07-hello --since 15m --format short || true
+until aws logs tail /aws/lambda/lab07-hello --since 15m --format short | grep -q Hello; do
+  sleep 5
+done
+aws logs tail /aws/lambda/lab07-hello --since 15m --format short
 
 aws lambda delete-function --function-name lab07-hello
 aws iam detach-role-policy \
@@ -1319,10 +1332,17 @@ aws ecr get-login-password --region "$REGION" | \
   docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 docker tag myapp:v1 "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/lab07-myapp:v1"
 docker push "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/lab07-myapp:v1"
+until aws ecr describe-image-scan-findings \
+  --repository-name lab07-myapp \
+  --image-id imageTag=v1 \
+  --region "$REGION" \
+  --query 'imageScanStatus.status' --output text | grep -Eq 'IN_PROGRESS|COMPLETE'; do
+  sleep 5
+done
 aws ecr describe-image-scan-findings \
   --repository-name lab07-myapp \
   --image-id imageTag=v1 \
-  --region "$REGION" || true
+  --region "$REGION"
 aws ecr delete-repository --repository-name lab07-myapp --region "$REGION" --force
 cd .. && rm -rf lab07-image
 ```

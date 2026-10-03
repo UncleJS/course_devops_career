@@ -58,17 +58,11 @@ flowchart LR
 
 By the end of this module you will be able to:
 
-- Explain what IaC is and why it matters
-- Understand the difference between Terraform and OpenTofu
 - Write HCL to provision cloud infrastructure
 - Use the core `init`, `plan`, `apply`, `destroy` workflow
 - Parameterize configurations with variables and outputs
 - Manage remote state safely
 - Organize code into reusable modules
-- Work with multiple environments (dev/staging/prod)
-- Migrate from Terraform to OpenTofu
-- Configure remote state backends (S3, GCS, Azure Blob) with locking
-- Use Terragrunt to keep IaC DRY across many environments
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -176,9 +170,14 @@ terraform version
 ### OpenTofu
 
 ```bash
-# GitHub release zip. Pin 1.10.0 (1.10 or newer).
+# GitHub release zip. Pin 1.10.0 (1.10 or newer). Ubuntu 24.04 does not ship unzip.
+sudo apt install -y unzip
 TOFU_VERSION="1.10.0"
-curl -Lo tofu.zip "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.zip"
+case "$(uname -m)" in
+  aarch64|arm64) TOFU_ARCH=arm64 ;;
+  *) TOFU_ARCH=amd64 ;;
+esac
+curl -Lo tofu.zip "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_${TOFU_ARCH}.zip"
 unzip tofu.zip && sudo mv tofu /usr/local/bin/
 
 tofu version
@@ -260,7 +259,7 @@ resource "aws_subnet" "public" {
 locals {
   # Strings
   name               = "production"
-  interpolated_name  = "web-${var.environment}" # String interpolation
+  interpolated_name  = "web-production" # String interpolation is "web-${var.environment}" once var.environment exists
 
   # Numbers
   port  = 8080
@@ -280,7 +279,7 @@ locals {
   }
 
   # Conditionals
-  instance_type = var.environment == "production" ? "t3.large" : "t3.micro"
+  instance_type = "t3.micro"
 }
 
 # for_each — create multiple resources from a map
@@ -520,7 +519,8 @@ terraform {
 OpenTofu also supports S3, GCS, Azure Blob, HTTP, and more.
 
 ```hcl
-# gcs-backend.tf — GCS backend in its own file
+# gcs-backend.tf — put this in its own directory. Terraform loads every .tf file
+# in one directory, so this backend cannot sit next to backend.tf.
 terraform {
   backend "gcs" {
     bucket = "mycompany-tofu-state"
@@ -1257,6 +1257,7 @@ cd ~/labs/module-08-module
 terraform init
 terraform plan
 terraform apply -auto-approve
+aws s3 ls | grep lab08-
 terraform destroy -auto-approve
 ```
 
@@ -1312,7 +1313,7 @@ resource "aws_s3_bucket" "lab" {
 terraform init -backend-config="bucket=${STATE_BUCKET}"
 terraform plan
 terraform apply -auto-approve
-aws s3 ls "s3://${STATE_BUCKET}/"
+aws s3 ls "s3://${STATE_BUCKET}/lab08/"
 rm -f terraform.tfstate terraform.tfstate.backup
 terraform plan
 terraform destroy -auto-approve

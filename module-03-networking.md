@@ -43,7 +43,6 @@ This module covers the key networking concepts every DevOps engineer must know, 
 
 By the end of this module you will be able to:
 
-- Explain the TCP/IP model and how data travels across a network
 - Understand IP addressing, subnets, and CIDR notation
 - Explain DNS resolution and debug DNS problems
 - Identify common ports and protocols by number
@@ -164,9 +163,10 @@ ss -s
 ICMP (Internet Control Message Protocol) is used for diagnostics — `ping` uses ICMP echo requests and replies.
 
 ```bash
-ping -c 4 8.8.8.8       # Send 4 ICMP packets to Google DNS
-traceroute 8.8.8.8      # Trace the route packets take
-mtr 8.8.8.8             # Combined ping + traceroute (real-time)
+sudo apt install -y traceroute mtr-tiny
+ping -c 4 8.8.8.8
+traceroute 8.8.8.8
+mtr --report --report-cycles 1 8.8.8.8
 ```
 
 > **Firewall note**: Many cloud providers block ICMP by default. A failed `ping` doesn't necessarily mean the host is down — test with `nc` or `curl` on a known-open port first.
@@ -343,7 +343,6 @@ resolvectl status                  # Upstream resolvers systemd-resolved actuall
 ```bash
 # Check what's listening on your system
 ss -tulnp                           # Modern — show TCP/UDP listeners
-netstat -tulnp                      # Classic equivalent
 lsof -i :80                         # Show what's using port 80
 
 # Test if a port is open
@@ -476,22 +475,20 @@ sudo iptables -A INPUT -p tcp --dport 22 -m limit --limit 6/min -j ACCEPT
 sudo iptables -P INPUT DROP
 
 # NAT — masquerade traffic from a private network (basic router config)
-sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/8 -o eth0 -j MASQUERADE
+IFACE=$(ip -o -4 route show to default | awk '{print $5; exit}')
+sudo iptables -t nat -A POSTROUTING -s 10.0.0.0/8 -o "$IFACE" -j MASQUERADE
 
 # Persist rules. The redirect must run as root, and the directory comes from iptables-persistent.
 sudo apt install iptables-persistent
 sudo sh -c 'iptables-save > /etc/iptables/rules.v4'
-sudo iptables-restore < /etc/iptables/rules.v4
+sudo sh -c 'iptables-restore < /etc/iptables/rules.v4'
 ```
 
 ### nftables — The Modern Replacement
 
 `nftables` replaces `iptables` on modern Linux systems (RHEL 8+, Debian 10+).
 
-```bash
-# List all rules
-sudo nft list ruleset
-
+```nft
 # A basic nftables config (/etc/nftables.conf)
 table inet filter {
     chain input {
@@ -1341,37 +1338,40 @@ Layer 7/App: Can we reach the service? (curl, telnet, nc)
 ### Diagnostic Commands
 
 ```bash
+sudo apt install -y ethtool traceroute mtr-tiny netcat-openbsd tcpdump
+IFACE=$(ip -o -4 route show to default | awk '{print $5; exit}')
+
 # Interface status
-ip addr show                        # Show IP addresses
-ip link show                        # Show interface status (up/down)
-ip route show                       # Show routing table
-ip route get 8.8.8.8               # Show exact route to a destination
-ethtool eth0                        # Show NIC details, speed, duplex
+ip addr show
+ip link show
+ip route show
+ip route get 8.8.8.8
+ethtool "$IFACE"
 
 # Connectivity
-ping -c 4 8.8.8.8                  # Test IP connectivity
-traceroute 8.8.8.8                 # Trace route (UDP by default)
-traceroute -T -p 443 example.com   # TCP traceroute on port 443
-mtr --report 8.8.8.8              # Combined ping + traceroute
+ping -c 4 8.8.8.8
+traceroute 8.8.8.8
+traceroute -T -p 443 example.com
+mtr --report --report-cycles 1 8.8.8.8
 
 # DNS debugging
-dig +trace example.com             # Full DNS resolution trace
-dig example.com @1.1.1.1          # Query Cloudflare DNS directly
-dig example.com @8.8.8.8          # Query Google DNS
-resolvectl status                  # Show systemd-resolved status (modern distros)
+dig +trace example.com
+dig example.com @1.1.1.1
+dig example.com @8.8.8.8
+resolvectl status
 
 # Port and service testing
-nc -zv example.com 443             # Test TCP port (verbose)
-nc -zv -w 3 example.com 443       # Test with 3s timeout
-ss -tulnp                          # Show all listening services
-ss -s                              # Socket statistics summary
-ss -tp                             # Show established TCP connections
+nc -zv example.com 443
+nc -zv -w 3 example.com 443
+ss -tulnp
+ss -s
+ss -tp
 
 # Traffic capture
-sudo tcpdump -i eth0 port 80       # Capture HTTP traffic
-sudo tcpdump -i eth0 host 1.2.3.4  # Capture traffic to/from an IP
-sudo tcpdump -i eth0 -w capture.pcap  # Save to file for Wireshark
-sudo tcpdump -i eth0 'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0'  # SYN/FIN only
+sudo tcpdump -i "$IFACE" port 80 -c 1
+sudo tcpdump -i "$IFACE" host 1.2.3.4 -c 1
+sudo tcpdump -i "$IFACE" -w capture.pcap -c 1
+sudo tcpdump -i "$IFACE" 'tcp[tcpflags] & (tcp-syn|tcp-fin) != 0' -c 1
 ```
 
 ### Interpreting Common Failures
@@ -1400,9 +1400,8 @@ sudo ip netns add myns
 # List namespaces
 ip netns list
 
-# Run a command inside a namespace
-sudo ip netns exec myns bash
-sudo ip netns exec myns ip addr show   # Run a single command in ns
+# Run one command in the namespace. An interactive bash would swallow the rest of this paste.
+sudo ip netns exec myns ip addr show
 
 # Create a veth pair (virtual ethernet — like a virtual cable)
 sudo ip link add veth0 type veth peer name veth1
@@ -1716,6 +1715,7 @@ getent hosts lab.local
 ### Lab 3.2 — Port Scanning and Services
 
 ```bash
+sudo apt install -y netcat-openbsd
 ss -tulnp | head
 nc -zv localhost 22
 python3 -m http.server 8080 >/tmp/lab3-http.log 2>&1 &
@@ -1741,8 +1741,12 @@ sudo ufw default deny incoming
 sudo ufw allow 80/tcp
 sudo ufw limit 22/tcp
 sudo ufw --force enable
+sudo apt install -y netcat-openbsd
 sudo ufw status verbose
 ip -4 -br addr
+VM_IP=$(ip -4 -br addr show scope global | awk '{print $3}' | cut -d/ -f1 | head -1)
+nc -zv -w 3 "$VM_IP" 8080 || true
+nc -zv -w 3 localhost 8080 || true
 ```
 
 `ufw limit` must be the SSH rule. An earlier `ufw allow 22/tcp` would match first and the limit would never run. `ufw` allows the loopback interface, so `nc` to `localhost` does not test the firewall.

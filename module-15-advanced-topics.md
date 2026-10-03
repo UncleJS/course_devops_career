@@ -179,17 +179,24 @@ kubectl create namespace argocd
 kubectl apply -n argocd \
   -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.1.0/manifests/install.yaml
 
-# Wait for pods to be ready
-kubectl -n argocd wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server --timeout=120s
+# CLI is the same v3.1.0 as the manifest. The install YAML does not include it.
+curl -sSL -o /tmp/argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/download/v3.1.0/argocd-linux-amd64
+sudo install -m 0755 /tmp/argocd-linux-amd64 /usr/local/bin/argocd
+
+kubectl -n argocd rollout status deployment/argocd-server --timeout=300s
+until kubectl -n argocd get secret argocd-initial-admin-secret >/dev/null 2>&1; do
+  sleep 5
+done
 
 # Get initial admin password
 argocd admin initial-password -n argocd
 
-# Port-forward the UI
-kubectl port-forward svc/argocd-server -n argocd 8080:443
-
-# Login via CLI
-argocd login localhost:8080 --username admin --password <password> --insecure
+# Port-forward, then log in. The forward stays in the background so the login can run.
+kubectl port-forward svc/argocd-server -n argocd 8080:443 >/tmp/argocd-port-forward.log 2>&1 &
+until bash -c 'echo >/dev/tcp/127.0.0.1/8080' >/dev/null 2>&1; do
+  sleep 1
+done
+argocd login localhost:8080 --username admin --password "$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)" --insecure
 ```
 
 #### Create an Application
@@ -682,14 +689,15 @@ kubectl apply -f samples/addons/kiali.yaml
 kubectl port-forward svc/kiali -n istio-system 20001:20001
 
 # mTLS inspection: certificates on the sidecar
-istioctl proxy-config secret <pod-name> -n production
+POD=$(kubectl get pod -n production -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config secret "$POD" -n production
 
 # Authorization check. This is not an mTLS inspection.
-istioctl x authz check <pod-name> -n production
+istioctl x authz check "$POD" -n production
 
 # Check proxy configuration
-istioctl proxy-config clusters <pod-name> -n production
-istioctl proxy-config routes <pod-name> -n production
+istioctl proxy-config clusters "$POD" -n production
+istioctl proxy-config routes "$POD" -n production
 
 # Analyze for misconfigurations
 istioctl analyze -n production
@@ -708,7 +716,7 @@ Linkerd is a lightweight, CNCF-graduated service mesh focused on simplicity and 
 ```bash
 # Install CLI
 curl --proto '=https' --tlsv1.2 -sSfL https://run.linkerd.io/install | sh
-# Run the export PATH line the installer prints. Do not hardcode a home directory.
+export PATH="$HOME/.linkerd2/bin:$PATH"
 
 # Pre-flight check
 linkerd check --pre
@@ -733,6 +741,11 @@ linkerd viz dashboard &
 ```
 
 #### Traffic split with Gateway API HTTPRoute
+
+```bash
+# A default cluster has no Gateway API CRDs. Install them before the HTTPRoute.
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.0/standard-install.yaml
+```
 
 ```yaml
 # 90/10 canary. Linkerd reads this HTTPRoute. It does not use SMI TrafficSplit.
@@ -917,7 +930,7 @@ spec:
 ```bash
 # Install Operator SDK
 curl -LO https://github.com/operator-framework/operator-sdk/releases/download/v1.34.1/operator-sdk_linux_amd64
-chmod +x operator-sdk_linux_amd64 && mv operator-sdk_linux_amd64 /usr/local/bin/operator-sdk
+chmod +x operator-sdk_linux_amd64 && sudo mv operator-sdk_linux_amd64 /usr/local/bin/operator-sdk
 
 # Scaffold a new operator
 mkdir myapp-operator && cd myapp-operator
@@ -1865,12 +1878,12 @@ Month 12+:  Security, HA, and the capstone (Modules 13-15)
 
 ```bash
 argocd app list
-argocd app get <app-name>
-argocd app sync <app-name>
-argocd app diff <app-name>
-argocd app rollback <app-name> <revision>
-argocd app history <app-name>
-argocd app delete <app-name>
+argocd app get APP_NAME
+argocd app sync APP_NAME
+argocd app diff APP_NAME
+argocd app rollback APP_NAME REVISION
+argocd app history APP_NAME
+argocd app delete APP_NAME
 argocd cluster list
 argocd repo list
 ```
@@ -1894,10 +1907,11 @@ flux check
 istioctl install --set profile=default
 istioctl verify-install
 istioctl analyze -n production
-istioctl proxy-config clusters <pod> -n production
-istioctl proxy-config routes <pod> -n production
-istioctl proxy-config secret <pod> -n production
-istioctl x authz check <pod> -n production          # authorization check, not mTLS
+POD=$(kubectl get pod -n production -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config clusters "$POD" -n production
+istioctl proxy-config routes "$POD" -n production
+istioctl proxy-config secret "$POD" -n production
+istioctl x authz check "$POD" -n production          # authorization check, not mTLS
 istioctl dashboard kiali
 istioctl dashboard jaeger
 ```
@@ -1929,16 +1943,20 @@ linkerd viz edges deployment -n production
 
 ```bash
 # Install ArgoCD on Minikube
-minikube start --cpus=4 --memory=8192
+minikube start --cpus=4 --memory=4096
+curl -sSL -o /tmp/argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/download/v3.1.0/argocd-linux-amd64
+sudo install -m 0755 /tmp/argocd-linux-amd64 /usr/local/bin/argocd
 kubectl create namespace argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.1.0/manifests/install.yaml
+kubectl -n argocd rollout status deployment/argocd-server --timeout=300s
+until kubectl -n argocd get secret argocd-initial-admin-secret >/dev/null 2>&1; do
+  sleep 5
+done
 
-# Get the initial password
-kubectl -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath="{.data.password}" | base64 -d
-
-# Port-forward, then log in before any argocd app command
-kubectl port-forward svc/argocd-server -n argocd 8080:443 &
+kubectl port-forward svc/argocd-server -n argocd 8080:443 >/tmp/argocd-port-forward.log 2>&1 &
+until bash -c 'echo >/dev/tcp/127.0.0.1/8080' >/dev/null 2>&1; do
+  sleep 1
+done
 argocd login localhost:8080 --username admin --password "$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)" --insecure
 
 # Create an Application pointing to the ArgoCD example repo
@@ -1949,10 +1967,12 @@ argocd app create guestbook \
   --dest-namespace default \
   --sync-policy automated \
   --self-heal
+argocd app wait guestbook --health --timeout 180
+argocd app get guestbook
 
 # Manually delete a deployment — watch ArgoCD restore it
 kubectl delete deployment guestbook-ui
-# Within 3 minutes, ArgoCD restores it
+kubectl rollout status deployment/guestbook-ui --timeout=180s
 ```
 
 **Expected:** `argocd app get guestbook` shows Synced and Healthy, and the guestbook Deployment returns after you delete it. This lab does not use an HPA, so self-heal restoring a deleted Deployment is the right check. Do not expect self-heal to undo a replica change made by an autoscaler.
@@ -2062,14 +2082,21 @@ spec:
           weight: 10
 EOF
 
-# Curl the Service name the VirtualService routes: hello
-kubectl run curl-lab --image=curlimages/curl:8.11.1 --restart=Never --rm -it --command -- \
-  sh -c 'for i in $(seq 1 20); do curl -s http://hello:5678; echo; done' | sort | uniq -c
+# Curl from a meshed pod. A pipe has no TTY, so this does not use -it.
+# Wait until the client and both hello pods have an app container and a sidecar (2/2).
+kubectl run curl-lab --image=curlimages/curl:8.11.1 --restart=Never --command -- sleep 300
+until [ "$(kubectl get pods -l app=hello --no-headers | awk '$2=="2/2"' | wc -l)" -eq 2 ] \
+  && kubectl get pod curl-lab --no-headers | awk '{print $2}' | grep -qx '2/2'; do
+  sleep 5
+done
+HELLO=$(kubectl get pod -l app=hello,version=v1 -o jsonpath='{.items[0].metadata.name}')
+istioctl proxy-config secret "$HELLO"
+kubectl exec curl-lab -c curl-lab -- sh -c 'for i in $(seq 1 20); do curl -s http://hello:5678; echo; done' | sort | uniq -c
 ```
 
-**Expected:** about 18 lines of "Hello from v1" and about 2 of "Hello from v2".
+**Expected:** `istioctl proxy-config secret` prints a certificate table for the hello pod. The curl counts are about 18 lines of "Hello from v1" and about 2 of "Hello from v2".
 
-**Cleanup:** `kubectl delete virtualservice,destinationrule,svc hello` and `kubectl delete deploy hello-v1 hello-v2`. `istioctl uninstall --purge -y` if you want Istio removed.
+**Cleanup:** `kubectl delete pod curl-lab --force --grace-period=0` and `kubectl delete virtualservice,destinationrule,svc hello` and `kubectl delete deploy hello-v1 hello-v2`. `istioctl uninstall --purge -y` if you want Istio removed.
 
 ---
 
@@ -2208,7 +2235,10 @@ EOF
 
 kubectl apply -f argocd/application.yaml
 argocd app sync capstone-api
-kubectl port-forward svc/capstone-api 8081:8080
+kubectl port-forward svc/capstone-api 8081:8080 >/tmp/capstone-port-forward.log 2>&1 &
+until bash -c 'echo >/dev/tcp/127.0.0.1/8081' >/dev/null 2>&1; do
+  sleep 1
+done
 curl -s http://127.0.0.1:8081
 ```
 

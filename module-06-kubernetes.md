@@ -1286,6 +1286,7 @@ Pod Security Policies (PSP) were **removed in Kubernetes 1.25**. Their replaceme
 
 ```bash
 # Label a namespace to enforce the Restricted standard
+kubectl create namespace production
 kubectl label namespace production \
   pod-security.kubernetes.io/enforce=restricted \
   pod-security.kubernetes.io/enforce-version=latest \
@@ -1336,6 +1337,7 @@ spec:
 
 ```bash
 # Warn label shows violations without rejecting pods
+kubectl create namespace production
 kubectl label namespace production \
   pod-security.kubernetes.io/warn=restricted --overwrite
 
@@ -1514,10 +1516,10 @@ kubectl diff -k k8s/overlays/production
 
 ### Lab 6.1 — Local Cluster Setup
 
-**Prerequisites:** Module 05. minikube installed. The machine has about 4 CPU and 8 GB RAM. No cloud account.
+**Prerequisites:** Module 05. minikube installed. The machine has about 8 GB RAM so the cluster can take 4 GB. No cloud account.
 
 ```bash
-minikube start --cpus=4 --memory=8192
+minikube start --cpus=4 --memory=4096
 kubectl cluster-info
 kubectl get nodes
 ```
@@ -1694,6 +1696,9 @@ spec:
 EOF
 kubectl apply -f cpu-burner.yaml
 kubectl rollout status deployment/cpu-burner
+until kubectl top pods -l app=cpu-burner 2>/dev/null | grep -q cpu-burner; do
+  sleep 5
+done
 kubectl top pods -l app=cpu-burner
 kubectl get hpa cpu-burner -w
 ```
@@ -1738,7 +1743,7 @@ A Deployment's pod name is not `frontend`. Select the pod with `-l app=frontend`
 
 ```bash
 minikube delete
-minikube start --cpus=4 --memory=8192 --cni=calico
+minikube start --cpus=4 --memory=4096 --cni=calico
 mkdir -p lab66 && cd lab66
 cat > netpol.yaml <<'EOF'
 apiVersion: v1

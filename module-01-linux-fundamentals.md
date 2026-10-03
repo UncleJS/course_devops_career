@@ -2,7 +2,7 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
-[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 01 of 15](https://img.shields.io/badge/module-01%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Beginner-brightgreen) ![bash 5.2+](https://img.shields.io/badge/bash-5.2%2B-4EAA25?logo=gnubash&logoColor=white) ![systemd 256+](https://img.shields.io/badge/systemd-256%2B-blueviolet) ![Linux](https://img.shields.io/badge/Linux-RHEL%20%C2%B7%20Ubuntu%20%C2%B7%20Debian-FCC624?logo=linux&logoColor=black)
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 01 of 15](https://img.shields.io/badge/module-01%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Beginner-brightgreen) ![bash 5.2+](https://img.shields.io/badge/bash-5.2%2B-4EAA25?logo=gnubash&logoColor=white) ![systemd 255](https://img.shields.io/badge/systemd-255-blueviolet) ![Linux](https://img.shields.io/badge/Linux-RHEL%20%C2%B7%20Ubuntu%20%C2%B7%20Debian-FCC624?logo=linux&logoColor=black)
 
 **Prerequisites:** Comfort using a computer. No Linux or programming experience required.
 
@@ -65,7 +65,7 @@ By the end of this module you will be able to:
 - Pipe commands together and redirect input and output
 - Inspect a process and stop it
 - Generate an SSH key pair
-- Use `sudo` and tell Ubuntu's `sudo` group from Rocky's `wheel` group
+- Use `sudo` to install a package and set an ACL
 - Chain `find`, `grep`, and `du`
 - Add an alias and a shell function to `~/.bashrc`
 - Read `vmstat`, `iostat`, and `journalctl`
@@ -117,7 +117,7 @@ cd /var/log             # Change to /var/log
 cd ..                   # Go up one directory
 cd ~                    # Go to your home directory
 cd -                    # Go back to previous directory
-tree /etc -L 2          # Display directory tree 2 levels deep
+sudo apt install -y tree && tree /etc -L 2
 ```
 
 ### File & Directory Management
@@ -148,7 +148,7 @@ find /etc -name "*.conf" -type f    # Config files only
 find . -perm 777                    # Find files with 777 permissions
 find . -user alice                  # Files owned by alice
 find . -name "*.sh" -exec chmod +x {} \;  # Find and make executable
-locate nginx.conf                   # Fast file search using index (updatedb first)
+sudo apt install -y plocate && sudo updatedb && locate nginx.conf
 which python3                       # Show full path of a command
 whereis nginx                       # Locate binary, source, and man page
 ```
@@ -476,7 +476,7 @@ sleep 300 &         # Run in background
 jobs                # List background jobs
 fg %1               # Bring job 1 to foreground
 bg %1               # Send stopped job to background
-Ctrl+Z              # Pause (stop) current foreground process
+# Ctrl+Z pauses the foreground job. It is a keypress, not a command.
 nohup command &     # Run immune to hangup (survives logout)
 disown %1           # Detach job from shell
 
@@ -634,13 +634,9 @@ passwd                  # Change your own password
 sudo passwd username    # Change another user's password
 
 # User management
-sudo useradd -m alice           # Create user alice with home directory
-# Admin group is sudo on Ubuntu/Debian and wheel on Rocky/RHEL
-sudo useradd -m -s /bin/bash -G sudo alice   # Ubuntu
-sudo useradd -m -s /bin/bash -G wheel alice  # Rocky Linux 9
+sudo useradd -m -s /bin/bash alice || true
 sudo usermod -aG sudo alice     # Ubuntu: add alice to sudo
-sudo usermod -aG wheel alice    # Rocky: add alice to wheel
-sudo usermod -aG docker alice   # Add alice to docker group
+# Rocky Linux 9 uses the wheel group instead: sudo usermod -aG wheel alice
 sudo usermod -s /bin/bash alice # Change login shell
 sudo userdel alice              # Delete user alice
 sudo userdel -r alice           # Delete user AND home directory
@@ -676,10 +672,10 @@ curl https://example.com    # Fetch a URL
 curl -I https://example.com # Fetch HTTP headers only
 curl -o file.txt https://example.com/file  # Download and save
 curl -L https://example.com  # Follow redirects
-nc -zv hostname 80          # Test if port 80 is open (netcat)
-nc -l 8080                  # Listen on port 8080
-netstat -tulnp              # Show listening ports and services
-ss -tulnp                   # Modern replacement for netstat
+sudo apt install -y netcat-openbsd wget
+nc -zv example.com 80       # Test if port 80 is open (netcat)
+nc -l -p 8080               # Listen on port 8080
+ss -tulnp                   # Listening ports. netstat is not installed.
 ss -s                       # Socket statistics summary
 wget https://example.com/file.tar.gz   # Download a file
 ip addr show                # Show IP addresses and interfaces
@@ -1141,68 +1137,46 @@ sudo sysctl vm.swappiness=10    # Reduce swap tendency
 ### Disk I/O Performance
 
 ```bash
-# Disk I/O stats
-iostat -xz 1        # Extended I/O stats every 1 second
-# Key columns: %util (busy %), await (avg wait ms), r/s, w/s
-iotop               # Interactive I/O monitor by process
-iotop -o            # Only show processes doing I/O
-
-# Disk speed testing
-dd if=/dev/zero of=/tmp/test bs=1M count=1024 oflag=dsync  # Write test
-dd if=/tmp/test of=/dev/null bs=1M                         # Read test
-
-# Find I/O-heavy processes
-pidstat -d 1        # Per-process disk I/O
-
-# Check for disk errors
-sudo dmesg | grep -i "error\|fail"
-sudo journalctl -k | grep -i "error\|fail"   # Kernel messages only
-sudo smartctl -a /dev/sda                    # S.M.A.R.T. disk health
+sudo apt install -y sysstat iotop smartmontools
+iostat -xz 1 1
+sudo iotop -o -b -n 1
+dd if=/dev/zero of=/tmp/test bs=1M count=64 oflag=dsync
+dd if=/tmp/test of=/dev/null bs=1M
+rm -f /tmp/test
+pidstat -d 1 1
+sudo dmesg | grep -i "error\|fail" || true
+sudo journalctl -k | grep -i "error\|fail" || true
+sudo smartctl -a /dev/sda || true
 ```
 
 ### Network Performance
 
 ```bash
-# Bandwidth monitoring
-iftop                           # Real-time bandwidth by connection
-nethogs                         # Per-process bandwidth usage
-nload                           # Interface bandwidth graph
-
-# Connection stats
-ss -s                           # Summary of socket stats
-ss -tulnp                       # All listening sockets
-ss -tp                          # All TCP connections with process info
-ss -o state established '( dport = :443 )'   # Established HTTPS connections
-
-# Packet stats
-ip -s link show eth0            # Interface packet counters
-netstat -s                      # Protocol-level stats (TCP retransmits, etc.)
-
-# Latency testing
-ping -c 100 8.8.8.8 | tail -5  # 100-ping latency stats
-hping3 -S -p 443 -c 100 example.com  # TCP latency (SYN packets)
+sudo apt install -y iftop nethogs nload hping3
+IFACE=$(ip -o -4 route show to default | awk '{print $5; exit}')
+sudo iftop -t -s 1 -i "$IFACE"
+sudo nethogs -t -c 1 "$IFACE"
+timeout 1 nload "$IFACE" || true
+ss -s
+ss -tulnp
+ss -tp
+ss -o state established '( dport = :443 )'
+ip -s link show "$IFACE"
+ping -c 4 8.8.8.8 | tail -5
+sudo hping3 -S -p 443 -c 3 example.com
 ```
 
 ### System-Wide Performance Snapshot
 
 ```bash
-# The USE method — Utilization, Saturation, Errors per resource
-# CPU: utilization (mpstat), saturation (load avg), errors (dmesg)
-# Memory: utilization (free), saturation (vmstat si/so), errors (dmesg)
-# Disk: utilization (iostat %util), saturation (await), errors (dmesg)
-# Network: utilization (iftop), saturation (ss), errors (ip -s link)
-
-# Quick snapshot tools
-sar -A 1 5          # All stats via sysstat
-dool                # Combined CPU/disk/net/mem stats (sudo apt install dool)
-
-# Performance investigation workflow
-uptime              # 1. Check load average
-dmesg | tail -10    # 2. Check recent kernel messages
-vmstat 1 5          # 3. Check CPU/memory/I/O overall
-pidstat 1           # 4. Find high-CPU/memory processes
-iostat -xz 1        # 5. Check disk I/O
-iftop               # 6. Check network usage
+sudo apt install -y sysstat
+sar -A 1 1
+uptime
+dmesg | tail -10
+vmstat 1 5
+pidstat 1 1
+iostat -xz 1 1
+ss -s
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1354,10 +1328,14 @@ EOF
 ### SSH Hardening
 
 ```bash
-# /etc/ssh/sshd_config — key settings to harden
-sudo vim /etc/ssh/sshd_config
+# Test the syntax, then reload. The settings belong in sshd_config, not in the shell.
+sudo sshd -t
+sudo systemctl reload ssh      # Ubuntu unit name
+sudo systemctl reload sshd     # Rocky unit name
+```
 
-# Recommended settings:
+```
+# /etc/ssh/sshd_config — key settings to harden
 Port 2222                       # Non-standard port (obscurity, not security)
 PermitRootLogin no              # Never allow direct root login
 PasswordAuthentication no       # Keys only, no passwords
@@ -1370,10 +1348,6 @@ AllowUsers alice bob            # Whitelist specific users
 AllowGroups sshusers            # Or whitelist a group
 X11Forwarding no                # Disable unless needed
 Banner /etc/ssh/banner.txt      # Show legal notice before login
-
-sudo sshd -t                    # Test config before applying it
-sudo systemctl reload ssh      # Ubuntu unit name
-sudo systemctl reload sshd     # Rocky unit name
 ```
 
 ### Fail2ban — Intrusion Prevention
@@ -1523,13 +1497,21 @@ getfacl test.sh
 6. Kill it: `kill <PID>`
 7. Check CPU and memory stats: `vmstat 1 5`
 
-**Expected:** `ps aux` shows PID 1 as a systemd process on a VM. `free -h` prints `Mem:` and `Swap:` lines. After `kill`, `ps aux | grep sleep` no longer shows the `sleep 300` process.
+**Expected:** On a VM, PID 1's command is `/sbin/init`. WSL without systemd shows its own init as PID 1. `free -h` prints `Mem:` and `Swap:` lines. After `kill`, `ps aux | grep sleep` no longer shows the `sleep 300` process.
 
 **Cleanup:** `pkill -f 'sleep 300' || true`
 
 ### Lab 1.4 — SSH Key Setup
 
-1. Generate an SSH key pair: `ssh-keygen -t ed25519 -C "devops-lab"`
+1. Generate an SSH key pair without a prompt. This does not overwrite a key you already have:
+
+```bash
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+if [ ! -f ~/.ssh/id_ed25519 ]; then
+  ssh-keygen -t ed25519 -C "devops-lab" -f ~/.ssh/id_ed25519 -N ""
+fi
+```
+
 2. View your public key: `cat ~/.ssh/id_ed25519.pub`
 3. If you have a second machine or VM, copy the key: `ssh-copy-id user@remote-host`
 4. Test passwordless login: `ssh user@remote-host`
@@ -1552,16 +1534,18 @@ getfacl test.sh
 
 ### Lab 1.6 — Shell Configuration
 
-1. Add a custom alias to `~/.bashrc`: `alias ports='ss -tulnp'`
-2. Add a `PATH` entry: `export PATH="$HOME/.local/bin:$PATH"`
-3. Append this function:
+Append the alias, `PATH` entry, and function, then load them in this shell:
 
 ```bash
+cat >> ~/.bashrc << 'EOF'
+alias ports='ss -tulnp'
+export PATH="$HOME/.local/bin:$PATH"
 mkcd() { mkdir -p "$1" && cd "$1"; }
+EOF
+source ~/.bashrc
+mkcd /tmp/testdir && pwd
+type ports
 ```
-
-4. Apply the changes: `source ~/.bashrc`
-5. Test: `mkcd /tmp/testdir && pwd`
 
 **Expected:** `pwd` prints `/tmp/testdir`. `type ports` prints the alias.
 

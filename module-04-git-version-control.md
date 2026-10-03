@@ -904,9 +904,9 @@ git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
 ### Detecting Secrets in History
 
 ```bash
-# Scan recent history. Container scanners are module 05; gitleaks runs on the VM.
-gitleaks detect --source .
-gitleaks detect --source . --log-opts="HEAD~50..HEAD"
+# gitleaks is not an Ubuntu 24.04 apt package. Skip these until you install a release binary.
+# gitleaks detect --source .
+# gitleaks detect --source . --log-opts="HEAD~50..HEAD"
 ```
 
 ### Removing Secrets from Git History
@@ -1039,10 +1039,22 @@ git status
 
 ### Lab 4.4 — GitHub Workflow
 
+Create a new local repo. Earlier labs delete their directories, so do not reuse one.
+
+```bash
+mkdir -p ~/labs/module-04-github && cd ~/labs/module-04-github
+git init -b main
+git config user.email "lab@example.com"
+git config user.name "Lab"
+echo "lab" > README.md
+git add README.md
+git commit -m "initial"
+```
+
 1. Create a repo on GitHub with branch protection rules:
    - Require PR review
    - Require status checks
-2. Push your local repo to it
+2. Add that repo as `origin` and push `main`
 3. Create a feature branch, make changes, push the branch
 4. Open a Pull Request with a clear description
 5. Review and merge via the GitHub UI
@@ -1050,7 +1062,7 @@ git status
 
 **Expected:** The pull request page shows the branch commits. After merge, `git pull` on `main` contains the feature commit. Branch protection on a free private repository may not include required status checks; require a pull request instead, and skip status checks if the UI does not offer them.
 
-**Cleanup:** Delete the practice repository on GitHub when you are done with it.
+**Cleanup:** `rm -rf ~/labs/module-04-github`. Delete the practice repository on GitHub when you are done with it.
 
 ### Lab 4.5 — Git Hook
 

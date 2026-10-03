@@ -68,13 +68,12 @@ flowchart LR
 
 By the end of this module you will be able to:
 
-- Explain Ansible's architecture and use cases
 - Write inventory files to define managed hosts
 - Run ad-hoc commands against groups of hosts
 - Write playbooks that install software and configure services
 - Use variables, facts, and Jinja2 templates for dynamic configs
 - Organize reusable automation with roles
-- Use handlers for conditional service restarts
+- Use a handler that runs when a template changes
 - Encrypt sensitive data with Ansible Vault
 - Write idempotent playbooks that are safe to re-run
 
@@ -131,16 +130,15 @@ Good installation and setup are less about getting the CLI on your laptop and mo
 This is also where beginners often learn their first Ansible lesson: connection problems are usually more common than playbook problems. Before building elaborate roles, make sure the control node can authenticate cleanly, reach the target hosts, and escalate privileges safely. If those basics are shaky, every later section feels harder than it should.
 
 ```bash
-# Ubuntu/Debian — Ansible 2.17 or 2.18
-sudo apt update
-sudo apt install -y pipx && pipx install 'ansible-core>=2.17,<2.19'
+# Ansible 2.17 or 2.18. Ubuntu 24.04 apt is 2.16, and Rocky 9 dnf is older, so both use pipx.
+if command -v apt >/dev/null 2>&1; then
+  sudo apt update && sudo apt install -y pipx
+else
+  sudo dnf install -y pipx
+fi
+pipx install 'ansible-core>=2.17,<2.19'
 pipx ensurepath
-
-# RHEL/Rocky/Fedora
-sudo dnf install -y ansible
-
-# Via pip (always latest version)
-pip3 install ansible
+export PATH="$HOME/.local/bin:$PATH"
 
 # Verify
 ansible --version
@@ -874,7 +872,8 @@ This shift is important because it changes how you think about host targeting. I
 
 ```bash
 ansible-galaxy collection install amazon.aws
-pip3 install boto3 botocore
+# boto3 must be in the same environment as ansible-core. A separate pipx app cannot be imported.
+pipx inject ansible-core boto3 botocore
 ```
 
 ```yaml
@@ -1006,7 +1005,7 @@ AWX exposes a full REST API — useful for triggering pipelines from CI/CD:
 
 ```bash
 # Install the AWX CLI
-pip install awxkit
+pipx install awxkit
 
 # Configure connection
 awx login --conf.host https://awx.example.com \
@@ -1040,7 +1039,7 @@ AWX 19+ uses **Execution Environments** — container images that bundle Ansible
 
 ```bash
 # Build a custom EE with ansible-builder
-pip install ansible-builder
+pipx install ansible-builder
 
 cat > execution-environment.yml <<'EOF'
 version: 3
@@ -1218,8 +1217,9 @@ cat > site.yml <<'EOF'
   roles:
     - webserver
 EOF
-ansible-playbook -i inventory site.yml
-ansible-playbook -i inventory site.yml
+ansible-playbook -i inventory site.yml --ask-become-pass
+ansible-playbook -i inventory site.yml --ask-become-pass
+systemctl is-active nginx
 ```
 
 **Expected:** The first run reports `changed` for the package and service tasks. The second run reports `ok` for both. `systemctl is-active nginx` prints `active`.

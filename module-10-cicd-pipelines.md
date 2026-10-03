@@ -58,16 +58,10 @@ flowchart LR
 
 By the end of this module you will be able to:
 
-- Explain CI/CD concepts and the value they provide
-- Choose the right deployment strategy for a given scenario
-- Write GitHub Actions workflows that build, test, and deploy code
-- Write GitLab CI/CD pipelines with stages and jobs
-- Configure Jenkins pipelines using declarative Jenkinsfile syntax
-- Store and use secrets securely in all three platforms
-- Build and push container images through a pipeline
-- Deploy to Kubernetes from a CI/CD pipeline
-- Design reusable, DRY pipelines using GitHub Actions reusable workflows and GitLab CI includes
-- Compare GitHub Actions, GitLab CI/CD, and Jenkins across key dimensions to choose the right tool
+- Write a GitHub Actions workflow that tests an app and one that builds and pushes an image
+- Write a GitLab CI pipeline with stages
+- Configure a Jenkins pipeline using a declarative Jenkinsfile
+- Switch a Service from a blue Deployment to a green Deployment
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -1261,7 +1255,7 @@ pipeline {
 
 ### Lab 10.1 — GitHub Actions: Basic CI
 
-Create a GitHub repository and add these files. The workflow is the Basic Workflow from this chapter (`.github/workflows/ci.yml`). Run `npm install` once so `npm ci` has a `package-lock.json`.
+Create a GitHub repository and add these files. The workflow is the Basic Workflow from this chapter (`.github/workflows/ci.yml`). Commit `package-lock.json` with `package.json`, `test.js`, `Dockerfile`, and the workflow. `npm ci` needs that lockfile, and this package has no dependencies, so the lockfile below is enough.
 
 ```json
 {
@@ -1270,6 +1264,21 @@ Create a GitHub repository and add these files. The workflow is the Basic Workfl
   "scripts": {
     "test": "node test.js",
     "lint": "node --check test.js"
+  }
+}
+```
+
+```json
+{
+  "name": "ci-lab",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "ci-lab",
+      "version": "1.0.0"
+    }
   }
 }
 ```
@@ -1404,7 +1413,7 @@ Push to `main` and open the package page for the repository.
 
 ### Lab 10.3 — GitLab Pipeline with Stages
 
-Create a GitLab project. Reuse the Lab 10.2 `Dockerfile`. Save this as `.gitlab-ci.yml`. The Docker job copies the chapter DinD settings: `DOCKER_TLS_CERTDIR`, `DOCKER_HOST` (`tcp://docker:2376`), and `DOCKER_CERT_PATH`.
+Create a GitLab project. Commit Lab 10.1's `package.json`, `package-lock.json`, `test.js`, and `Dockerfile` at the project root. Save this as `.gitlab-ci.yml`. The Docker job copies the chapter DinD settings: `DOCKER_TLS_CERTDIR`, `DOCKER_HOST` (`tcp://docker:2376`), and `DOCKER_CERT_PATH`.
 
 In Settings → CI/CD → Variables, add a masked variable `FAKE_API_KEY` with value `ZmFrZS1rZXk=`.
 

@@ -893,28 +893,22 @@ flowchart LR
 
 ### Common Cron Patterns
 
+```
+# Examples. These are crontab lines, not shell commands.
+# 0 * * * *       /usr/local/bin/check-disk.sh
+# 0 2 * * *       /usr/local/bin/backup.sh
+# 0 2 * * 0       /usr/local/bin/weekly-report.sh
+# */5 * * * *     /usr/local/bin/health-check.sh
+# 0 0 1 * *       /usr/local/bin/monthly-cleanup.sh
+# @reboot         /usr/local/bin/start-services.sh
+# @daily          /usr/local/bin/backup.sh
+# @weekly         /usr/local/bin/report.sh
+# 0 2 * * * /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1
+# 0 3 * * *  www-data  /usr/local/bin/clean-cache.sh
+```
+
 ```bash
-# Edit crontab
-crontab -e
-
-# List current crontab
-crontab -l
-
-# Examples:
-0 * * * *       /usr/local/bin/check-disk.sh         # Every hour
-0 2 * * *       /usr/local/bin/backup.sh             # Daily at 2:00 AM
-0 2 * * 0       /usr/local/bin/weekly-report.sh      # Every Sunday at 2:00 AM
-*/5 * * * *     /usr/local/bin/health-check.sh       # Every 5 minutes
-0 0 1 * *       /usr/local/bin/monthly-cleanup.sh    # 1st of every month
-@reboot         /usr/local/bin/start-services.sh     # On system startup
-@daily          /usr/local/bin/backup.sh             # Same as 0 0 * * *
-@weekly         /usr/local/bin/report.sh
-
-# Redirect output to log file
-0 2 * * * /usr/local/bin/backup.sh >> /var/log/backup.log 2>&1
-
-# System-wide cron (requires root) — /etc/cron.d/myapp
-0 3 * * *  www-data  /usr/local/bin/clean-cache.sh
+crontab -l || true
 ```
 
 ### systemd Timers (Modern Alternative to Cron)
@@ -988,7 +982,9 @@ for path in Path('/var/log').glob('*.log'):
 # Create directories
 os.makedirs('/tmp/myapp/data', exist_ok=True)
 
-# Copy and move
+# Copy and move. Create the sources first.
+Path('/tmp/source.txt').write_text('source\n')
+Path('/tmp/old.txt').write_text('old\n')
 shutil.copy('/tmp/source.txt', '/tmp/dest.txt')
 shutil.move('/tmp/old.txt', '/tmp/new.txt')
 ```
@@ -1026,14 +1022,12 @@ data = '{"name": "web01", "status": "healthy"}'
 parsed = json.loads(data)
 print(parsed['name'])
 
-# Load JSON from file
-with open('config.json') as f:
-    config = json.load(f)
-
-# Write JSON to file
+# Write JSON, then read it back
 config = {"env": "production", "replicas": 3}
 with open('config.json', 'w') as f:
     json.dump(config, f, indent=2)
+with open('config.json') as f:
+    config = json.load(f)
 
 # HTTP GET request (built-in, no extra libraries)
 with urllib.request.urlopen('https://httpbin.org/get') as response:
@@ -1075,6 +1069,8 @@ if 'DEBUG' in os.environ:
 import yaml
 
 # Read a YAML file (e.g., Kubernetes manifest, Compose file)
+with open('deployment.yaml', 'w') as f:
+    f.write('spec:\n  replicas: 2\n')
 with open('deployment.yaml') as f:
     manifest = yaml.safe_load(f)
 
@@ -1492,11 +1488,14 @@ Save this as `system-info.sh`, then `chmod +x system-info.sh && ./system-info.sh
 set -euo pipefail
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 log "host=$(hostname) user=$USER"
+for label in disk mem; do
+  log "section=$label"
+done
 log "disk=$(df -h / | awk 'NR==2 {print $5}')"
 log "mem=$(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
 ```
 
-**Expected:** Three lines, each starting with a timestamp. The disk line contains a percent sign.
+**Expected:** Five lines, each starting with a timestamp. Two of them start the message with `section=`. The disk line contains a percent sign.
 
 **Cleanup:** `rm -f system-info.sh`
 
@@ -1520,7 +1519,7 @@ else
 fi
 ```
 
-Run `bash disk-alert.sh` and `bash disk-alert.sh 1 2`.
+Run `bash disk-alert.sh` and `bash disk-alert.sh 1 2; echo $?`.
 
 **Expected:** The first run prints `Disk usage is healthy` on a normal lab VM. The second run prints `CRITICAL` and `echo $?` prints `2`.
 

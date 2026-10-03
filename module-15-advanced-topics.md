@@ -2097,7 +2097,7 @@ istioctl proxy-config secret "$HELLO"
 kubectl exec curl-lab -c curl-lab -- sh -c 'for i in $(seq 1 20); do curl -s http://hello:5678; echo; done' | sort | uniq -c
 ```
 
-**Expected:** `istioctl proxy-config secret` prints a certificate table for the hello pod. The curl counts are about 18 lines of "Hello from v1" and about 2 of "Hello from v2".
+**Expected:** `istioctl proxy-config secret` prints a certificate table for the hello pod. `uniq -c` prints counts near 18 and 2.
 
 **Cleanup:** `kubectl delete pod curl-lab --force --grace-period=0` and `kubectl delete virtualservice,destinationrule,svc hello` and `kubectl delete deploy hello-v1 hello-v2`. `istioctl uninstall --purge -y` if you want Istio removed.
 

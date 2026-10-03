@@ -807,7 +807,7 @@ systemctl --user enable webapp@1 webapp@2 webapp@3
 systemctl --user start webapp@1 webapp@2 webapp@3
 
 # Check all instances
-systemctl --user status 'webapp@*'
+systemctl --user status 'webapp@*' --no-pager
 
 # Scale up: add a 4th
 systemctl --user enable --now webapp@4
@@ -1105,7 +1105,7 @@ systemctl --user daemon-reload
 # The service name is derived from the filename (without .container)
 systemctl --user start webserver
 systemctl --user enable webserver
-systemctl --user status webserver
+systemctl --user status webserver --no-pager
 
 # Logs
 # journalctl --user -u webserver -f
@@ -1345,7 +1345,7 @@ podman manifest push myapp:1.0 ghcr.io/uncleJs/myapp:1.0
 
 ```bash
 # Install
-sudo dnf install -y buildah    # RHEL/Fedora
+# sudo dnf install -y buildah    # RHEL/Fedora. Ubuntu uses the apt line.
 sudo apt install -y buildah    # Ubuntu
 
 # Build from a Containerfile (same as podman build)
@@ -1446,7 +1446,7 @@ docker compose up -d    # ← Compose running against Podman
 
 ```bash
 # Install
-sudo dnf install -y skopeo    # RHEL/Fedora
+# sudo dnf install -y skopeo    # RHEL/Fedora. Ubuntu uses the apt line.
 sudo apt install -y skopeo    # Ubuntu
 
 # Inspect a remote image without pulling it
@@ -1657,11 +1657,13 @@ WantedBy=default.target
 #### Step 5 — Environment file
 
 ```bash
-# ~/.config/containers/systemd/myapp.env
+mkdir -p ~/.config/containers/systemd
+cat > ~/.config/containers/systemd/myapp.env <<'EOF'
 REDIS_PASSWORD=changeme_in_production
 REDIS_URL=redis://:changeme_in_production@redis:6379
 NODE_ENV=production
 API_BASE=http://api:3000
+EOF
 ```
 
 ```bash
@@ -1689,7 +1691,7 @@ printf 'events {}\nhttp { server { listen 80; location / { return 200 "ok\\n"; }
 systemctl --user start frontend
 
 # Verify
-systemctl --user status frontend api redis
+systemctl --user status frontend api redis --no-pager
 podman ps
 podman pod ps
 
@@ -1880,7 +1882,7 @@ EOF
 systemctl --user daemon-reload
 systemctl --user cat nginx-quadlet.service
 systemctl --user start nginx-quadlet.service
-until curl -sf -o /dev/null http://localhost:8081; do sleep 1; done
+timeout 30 bash -c 'until curl -sf -o /dev/null http://localhost:8081; do sleep 1; done' || true
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081
 journalctl --user -u nginx-quadlet.service -n 20 --no-pager
 systemctl --user enable nginx-quadlet.service

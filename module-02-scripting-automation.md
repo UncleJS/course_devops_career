@@ -1542,7 +1542,7 @@ awk '$3 == "ERROR" {print $4, $5}' app.log | sort | uniq -c
 
 Default `sed` treats `+` as a literal character. `-E` is required for the IP pattern.
 
-**Expected:** Two ERROR lines. The `sed` output contains `REDACTED` and no `10.0.0.5`. `uniq -c` prints `2 disk full`.
+**Expected:** The first awk prints `2026-10-03 10:01:00 disk full` and `2026-10-03 10:02:00 disk full`. The `sed` output contains `REDACTED` and no `10.0.0.5`. `uniq -c` prints `2 disk full`.
 
 **Cleanup:** `rm -f app.log`
 

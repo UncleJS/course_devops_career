@@ -840,7 +840,7 @@ sudo systemctl restart nginx    # Restart a service
 sudo systemctl reload nginx     # Reload config without restart
 sudo systemctl enable nginx     # Start on boot
 sudo systemctl disable nginx    # Do not start on boot
-sudo systemctl status nginx     # Show status and recent logs
+sudo systemctl status nginx --no-pager  # Show status and recent logs
 sudo systemctl is-active nginx  # Check if running (returns "active" or "inactive")
 sudo systemctl is-enabled nginx # Check if enabled for boot
 
@@ -1025,13 +1025,14 @@ source ~/.bashrc
 `.env` files store environment variables for an application, keeping secrets out of code:
 
 ```bash
-# .env
+cat > .env <<'EOF'
 DATABASE_HOST=localhost
 DATABASE_PORT=5432
 DATABASE_NAME=myapp
 DATABASE_PASSWORD=secret123
 API_KEY=abc123def456
 NODE_ENV=development
+EOF
 ```
 
 ```bash
@@ -1488,7 +1489,8 @@ getfacl test.sh
 4. Start a background process: `sleep 300 &`
 5. Find its PID: `ps aux | grep sleep`
 6. Kill it: `kill "$(pgrep -n sleep)"`
-7. Check CPU and memory stats: `vmstat 1 5`
+7. Confirm it is gone: `ps aux | grep sleep`
+8. Check CPU and memory stats: `vmstat 1 5`
 
 **Expected:** On a VM, PID 1's command is `/sbin/init`. WSL without systemd shows its own init as PID 1. `free -h` prints `Mem:` and `Swap:` lines. After `kill`, `ps aux | grep sleep` no longer shows the `sleep 300` process.
 

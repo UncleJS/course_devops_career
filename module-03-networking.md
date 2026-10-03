@@ -1725,6 +1725,7 @@ sudo timeout 3 tcpdump -i lo port 8080 -c 4 -A &
 sleep 1
 curl -s -o /dev/null http://127.0.0.1:8080/
 kill "$(lsof -ti:8080)" || true
+ss -tulnp | grep 8080 || true
 ```
 
 **Expected:** `nc` reports port 22 open if SSH is installed. `curl` prints `200`. `ss` shows python listening on 8080. After cleanup, port 8080 is closed.

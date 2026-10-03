@@ -964,8 +964,11 @@ spec:
   nodeport_port: 30080
 EOF
 
-# Watch the operator deploy AWX (takes 5–10 minutes)
-kubectl get pods -n awx -w
+# The operator takes 5–10 minutes. Stop after that and continue.
+for _ in $(seq 1 40); do
+  kubectl get secret awx-admin-password -n awx >/dev/null 2>&1 && break
+  sleep 15
+done
 
 # Retrieve the auto-generated admin password
 kubectl get secret awx-admin-password -n awx \

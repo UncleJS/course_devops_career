@@ -243,7 +243,7 @@ az vm open-port --port 80 --resource-group myRG --name myVM
 
 # Stop / deallocate / delete
 az vm deallocate --resource-group myRG --name myVM
-az vm delete --resource-group myRG --name myVM
+az vm delete --resource-group myRG --name myVM --yes
 ```
 
 ### GCP Compute Engine
@@ -261,11 +261,11 @@ gcloud compute instances create webserver \
 gcloud compute instances list
 
 # SSH into instance
-gcloud compute ssh webserver --zone=us-central1-a
+# gcloud compute ssh webserver --zone=us-central1-a  # Opens a shell. Use --command in a lab.
 
 # Stop / delete
 gcloud compute instances stop webserver --zone=us-central1-a
-gcloud compute instances delete webserver --zone=us-central1-a
+gcloud compute instances delete webserver --zone=us-central1-a --quiet
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1190,6 +1190,7 @@ aws s3 ls "s3://${BUCKET}/"
 PRESIGNED=$(aws s3 presign "s3://${BUCKET}/hello.txt" --expires-in 300)
 curl -fsS "$PRESIGNED"
 aws s3 rb "s3://${BUCKET}" --force
+aws s3 ls || true
 rm -f hello.txt
 ```
 
@@ -1215,6 +1216,7 @@ aws iam detach-user-policy \
   --user-name lab07-reader \
   --policy-arn arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
 aws iam delete-user --user-name lab07-reader
+aws iam get-user --user-name lab07-reader || true
 aws configure set aws_access_key_id "" --profile lab07-reader
 aws configure set aws_secret_access_key "" --profile lab07-reader
 ```
@@ -1322,6 +1324,7 @@ done
 aws logs tail /aws/lambda/lab07-hello --since 15m --format short
 
 aws lambda delete-function --function-name lab07-hello
+aws lambda get-function --function-name lab07-hello || true
 aws iam detach-role-policy \
   --role-name lab07-lambda-role \
   --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
@@ -1362,6 +1365,7 @@ aws ecr describe-image-scan-findings \
   --image-id imageTag=v1 \
   --region "$REGION"
 aws ecr delete-repository --repository-name lab07-myapp --region "$REGION" --force
+aws ecr describe-repositories --repository-names lab07-myapp --region "$REGION" || true
 cd .. && rm -rf lab07-image
 ```
 

@@ -864,7 +864,7 @@ else
 fi
 
 # Cleanup
-mysql -h"${RESTORE_HOST}" -u root -p -e "DROP DATABASE ${TEST_DB};"
+mysql -h"${RESTORE_HOST}" -u root -e "DROP DATABASE ${TEST_DB};"
 rm -f /tmp/appdb.sql.gz /tmp/checksums.md5
 ```
 
@@ -1277,7 +1277,7 @@ kubectl -n chaos-lab delete pod \
   $(kubectl -n chaos-lab get pods -l app=my-api -o name | shuf -n 1)
 
 # Drain a node (simulate node failure)
-kubectl drain node-03 --ignore-daemonsets --delete-emptydir-data --grace-period=30
+# kubectl drain node-03 --ignore-daemonsets --delete-emptydir-data --grace-period=30
 
 # Simulate network partition (tc - traffic control)
 tc qdisc add dev eth0 root netem delay 500ms 100ms loss 5%
@@ -1365,7 +1365,7 @@ echo "show info" | socat stdio /run/haproxy/admin.sock
 echo "show servers state" | socat stdio /run/haproxy/admin.sock
 
 # Keepalived
-systemctl status keepalived
+systemctl status keepalived --no-pager
 ip addr show eth0 | grep 192.168.1.100            # Check if VIP is local
 journalctl -u keepalived -n 50 --no-pager
 
@@ -1395,7 +1395,7 @@ velero schedule get
 # Kubernetes HA
 kubectl get nodes -o wide
 NODE=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
-kubectl drain "$NODE" --ignore-daemonsets --delete-emptydir-data
+# kubectl drain "$NODE" --ignore-daemonsets --delete-emptydir-data
 kubectl uncordon "$NODE"
 kubectl get pdb -A
 kubectl get poddisruptionbudget -n production
@@ -1417,6 +1417,7 @@ for port in 8001 8002 8003; do
   mkdir -p /tmp/server${port}
   echo "Server on port ${port}" > /tmp/server${port}/index.html
   python3 -m http.server ${port} --directory /tmp/server${port} &
+  echo $! > /tmp/server${port}.pid
 done
 
 if command -v dnf >/dev/null 2>&1; then
@@ -1454,7 +1455,9 @@ sudo haproxy -f /etc/haproxy/haproxy.cfg -c
 sudo systemctl reload haproxy
 
 for i in $(seq 1 10); do curl -s http://localhost/; echo; done
-# Stop the process on 8001 and run the loop again to see traffic move to 8002 and 8003.
+kill "$(cat /tmp/server8001.pid)"
+sleep 3
+for i in $(seq 1 6); do curl -s http://localhost/; echo; done
 ```
 
 **Expected:** responses rotate across "Server on port 8001", 8002, and 8003. After you stop 8001, only 8002 and 8003 remain.
@@ -1528,7 +1531,7 @@ SELECT * FROM lab.t;
 "
 ```
 
-**Expected:** the row inserted on the primary is visible on the replica before promotion. After promotion, a new insert on port 3307 succeeds.
+**Expected:** the row inserted on the primary is visible on the replica before promotion. After promotion, the replica `INSERT` succeeds and `SELECT` prints both rows.
 
 **Cleanup:** `docker rm -f mysql-primary mysql-replica && docker network rm mysql-lab`
 
@@ -1562,7 +1565,9 @@ kubectl rollout status deployment/lab-app
 kubectl get pdb lab-app-pdb
 ```
 
-**Expected:** `ALLOWED DISRUPTIONS` is 1. A drain of the only node in a one-node cluster will still stall if that would drop below the budget; use a second node or `kubectl delete pod` on one replica and confirm two stay Ready.
+**Expected:** `ALLOWED DISRUPTIONS` is 1.
+
+A drain of the only node in a one-node cluster will still stall if that would drop below the budget. Use a second node for that check. This lab deletes one pod instead.
 
 **Cleanup:** `kubectl delete pdb lab-app-pdb && kubectl delete deployment lab-app`
 

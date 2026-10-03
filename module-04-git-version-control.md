@@ -162,12 +162,14 @@ git diff HEAD               # See all changes vs last commit
 
 git add file.txt            # Stage a specific file
 git add .                   # Stage all changes
-git add -p                  # Interactively stage chunks (powerful! review before staging)
-git add -i                  # Interactive staging menu
+# git add -p and git add -i open a prompt, so they stay commented.
+# git add -p
+# git add -i
 
 git commit -m "feat(auth): add JWT token refresh"   # Commit with message
-git commit                  # Opens editor for multi-line message
-git commit --amend          # Amend the last commit (ONLY before pushing!)
+# git commit and git commit --amend open an editor, so they stay commented.
+# git commit
+# git commit --amend
 
 git log                     # Full commit history
 git log --oneline           # Compact one-line history
@@ -511,8 +513,8 @@ git stash branch feature/wip stash@{0}  # Create a branch from a stash
 git switch feature/my-feature
 git rebase main
 
-# Interactive rebase — squash, reorder, edit commits
-git rebase -i HEAD~5        # Rebase last 5 commits interactively
+# Interactive rebase opens an editor, so it stays commented.
+# git rebase -i HEAD~5
 # Commands in interactive rebase:
 # pick   = keep commit as-is
 # reword = keep but edit message
@@ -524,7 +526,7 @@ git rebase -i HEAD~5        # Rebase last 5 commits interactively
 
 # Autosquash: mark commits with "fixup!" prefix and Git squashes automatically
 git commit -m "fixup! feat(auth): add JWT token refresh"
-git rebase -i --autosquash main
+# git rebase -i --autosquash main
 ```
 
 > ⚠️ **Golden rule**: Never rebase commits that have been pushed to a shared remote branch. Rebase is for local history cleanup before pushing.

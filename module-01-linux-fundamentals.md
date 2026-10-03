@@ -770,9 +770,9 @@ sudo apt upgrade -y             # Upgrade all packages
 sudo apt full-upgrade -y        # Upgrade, removing packages only if a dependency requires it
 sudo apt autoremove -y          # Remove packages that nothing depends on anymore
 sudo apt install -y nginx       # Install a package
-sudo apt remove nginx           # Remove a package (keep config)
-sudo apt purge nginx            # Remove package and config files
-sudo apt autoremove             # Remove unused dependencies
+sudo apt remove -y nginx        # Remove a package (keep config)
+sudo apt purge -y nginx          # Remove package and config files
+sudo apt autoremove -y           # Remove unused dependencies
 apt search nginx                # Search for a package
 apt show nginx                  # Show package details
 dpkg -l | grep nginx            # List installed packages matching nginx
@@ -863,7 +863,7 @@ journalctl --vacuum-time=7d     # Delete logs older than 7 days
 # System targets (like runlevels)
 systemctl get-default               # Show current target (e.g. multi-user.target)
 sudo systemctl set-default graphical.target
-sudo systemctl isolate rescue.target  # Switch to rescue mode
+# sudo systemctl isolate rescue.target  # Drops the session into rescue mode.
 
 # Writing a custom service unit
 sudo tee /etc/systemd/system/myapp.service << 'EOF'

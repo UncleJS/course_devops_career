@@ -383,7 +383,7 @@ wait_for_port() {
     done
     return 0
 }
-wait_for_port localhost 5432 60 && echo "DB ready" || echo "DB timeout"
+# wait_for_port localhost 5432 60 && echo "DB ready" || echo "DB timeout"
 
 # Read lines from a file
 while IFS= read -r LINE; do

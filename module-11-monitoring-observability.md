@@ -215,7 +215,7 @@ tar xvf prometheus-2.55.1.linux-amd64.tar.gz
 cd prometheus-2.55.1.linux-amd64/
 
 # --web.enable-lifecycle is required for POST /-/reload
-./prometheus --config.file=prometheus.yml --web.enable-lifecycle
+./prometheus --config.file=prometheus.yml --web.enable-lifecycle >/tmp/prometheus.log 2>&1 &
 ```
 
 #### Core configuration: `prometheus.yml`

@@ -162,7 +162,7 @@ podman run -it ubuntu:24.04 bash
 
 ```bash
 # Remove old versions
-sudo apt remove docker docker-engine docker.io containerd runc
+sudo apt remove -y docker docker-engine docker.io containerd runc
 
 # Install via official script (quickest)
 curl -fsSL https://get.docker.com | sh

@@ -1818,7 +1818,7 @@ while True:
 ```bash
 sudo mkdir -p /var/log/app
 sudo chown "$USER" /var/log/app
-python3 app.py >> /var/log/app/app.log
+python3 app.py >> /var/log/app/app.log &
 ```
 
 Do not add a second Promtail config. The panel query is:

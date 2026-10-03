@@ -298,10 +298,11 @@ az role assignment create \
   --role "Storage Blob Data Contributor" \
   --assignee "$(az account show --query user.name --output tsv)" \
   --scope "$(az storage account show --name mystorageaccount --resource-group myRG --query id --output tsv)"
-# Data-plane RBAC can take a minute. Retry the first data-plane call until it succeeds.
-until az storage container create --name mycontainer --account-name mystorageaccount --auth-mode login; do
+# Data-plane RBAC can take a minute. This account name is a placeholder, so stop after four tries.
+for _ in 1 2 3 4; do
+  az storage container create --name mycontainer --account-name mystorageaccount --auth-mode login && break
   sleep 15
-done
+done || true
 az storage blob upload --file ./file.txt --container-name mycontainer --name file.txt --account-name mystorageaccount --auth-mode login
 az storage blob list --container-name mycontainer --account-name mystorageaccount --auth-mode login --output table
 

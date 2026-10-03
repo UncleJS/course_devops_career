@@ -140,12 +140,12 @@ Current OpenTofu is its own release line. Day-to-day HCL in this module works on
 # Terraform
 terraform init
 terraform plan
-terraform apply
+# terraform apply prompts. Use -auto-approve when you intend to apply.
 
 # OpenTofu (same commands, different binary)
 tofu init
 tofu plan
-tofu apply
+# tofu apply prompts. Use -auto-approve when you intend to apply.
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -412,15 +412,15 @@ variable "db_password" {
 # environment = "production"
 # instance_type = "t3.large"
 
-# Method 2: Command line
-terraform apply -var="environment=production"
+# Method 2: Command line. terraform apply prompts, so this stays commented.
+# terraform apply -var="environment=production" -auto-approve
 
 # Method 3: Environment variables (prefix TF_VAR_)
 export TF_VAR_environment=production
 export TF_VAR_db_password=secret123
 
-# Method 4: -var-file
-terraform apply -var-file="production.tfvars"
+# Method 4: -var-file. terraform apply prompts, so this stays commented.
+# terraform apply -var-file="production.tfvars" -auto-approve
 ```
 
 ### Outputs (outputs.tf)
@@ -715,7 +715,9 @@ terraform workspace new production    # Create production workspace
 terraform workspace list              # List all workspaces
 terraform workspace select staging    # Switch to staging
 terraform workspace show              # Current workspace
+```
 
+```hcl
 # Use workspace name in code
 resource "aws_s3_bucket" "app" {
   bucket = "myapp-${terraform.workspace}-data"
@@ -1314,7 +1316,7 @@ terraform plan
 terraform destroy -auto-approve
 ```
 
-**Expected:** init reports that the S3 backend is configured. The first plan prints `Plan: 1 to add, 0 to change, 0 to destroy.` After apply, `aws s3 ls` on the state bucket shows `lab08/terraform.tfstate`. After you delete the local state files, `terraform plan` still prints `No changes` because it read the remote state. Destroy prints `Destroy complete! Resources: 1 destroyed.`
+**Expected:** init reports that the S3 backend is configured. The first plan prints `Plan: 1 to add, 0 to change, 0 to destroy.` After apply, `aws s3 ls "s3://${STATE_BUCKET}/lab08/"` shows `terraform.tfstate`. After you delete the local state files, `terraform plan` still prints `No changes` because it read the remote state. Destroy prints `Destroy complete! Resources: 1 destroyed.`
 
 **Teardown:** destroy removes the demo bucket. The state bucket is outside Terraform. Empty its versions, then delete it:
 

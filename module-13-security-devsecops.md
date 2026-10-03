@@ -1772,7 +1772,7 @@ trivy image python:3.8 --severity CRITICAL,HIGH
 trivy image python:3.12-slim
 ```
 
-**Expected:** `python:3.8` reports CRITICAL or HIGH findings. `python:3.12-slim` reports fewer. Skip the `myapp:lab` lines if you have not built an image yet.
+**Expected:** `python:3.8` reports CRITICAL or HIGH findings. `python:3.12-slim` reports fewer.
 
 **Cleanup:** `docker image rm python:3.8 python:3.12-slim` if you do not need them. `rm -f sbom.json`.
 

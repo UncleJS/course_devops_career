@@ -842,13 +842,16 @@ aws s3 cp "s3://my-db-backups/mysql/${BACKUP_DATE}/appdb.sql.gz" /tmp/
 aws s3 cp "s3://my-db-backups/mysql/${BACKUP_DATE}/checksums.md5" /tmp/
 md5sum --check /tmp/checksums.md5
 
-# Restore to test database
-mysql -h"${RESTORE_HOST}" -u root -p -e "CREATE DATABASE ${TEST_DB};"
-zcat /tmp/appdb.sql.gz | mysql -h"${RESTORE_HOST}" -u root -p "${TEST_DB}"
+# Restore to test database. MYSQL_PWD keeps mysql from prompting.
+export MYSQL_PWD="${MYSQL_ROOT_PASSWORD:-lab}"
+mysql -h"${RESTORE_HOST}" -u root -e "CREATE DATABASE ${TEST_DB};"
+zcat /tmp/appdb.sql.gz | mysql -h"${RESTORE_HOST}" -u root "${TEST_DB}"
 
 # Verify row counts match
-PROD_COUNT=$(mysql -h db-primary -u app_user -p appdb -se "SELECT COUNT(*) FROM orders;")
-TEST_COUNT=$(mysql -h"${RESTORE_HOST}" -u root -p "${TEST_DB}" -se "SELECT COUNT(*) FROM orders;")
+export MYSQL_PWD="${APP_PASSWORD:-lab}"
+PROD_COUNT=$(mysql -h db-primary -u app_user appdb -se "SELECT COUNT(*) FROM orders;")
+export MYSQL_PWD="${MYSQL_ROOT_PASSWORD:-lab}"
+TEST_COUNT=$(mysql -h"${RESTORE_HOST}" -u root "${TEST_DB}" -se "SELECT COUNT(*) FROM orders;")
 
 if [ "${PROD_COUNT}" == "${TEST_COUNT}" ]; then
     echo "✅ Backup verification PASSED: ${PROD_COUNT} orders verified"
@@ -1618,6 +1621,7 @@ sudo mv /tmp/kube-scheduler.yaml /etc/kubernetes/manifests/
 # Verify the namespace returns
 until kubectl get --raw=/readyz >/dev/null 2>&1; do sleep 2; done
 kubectl get namespace backup-test
+kubectl get configmap test-data -n backup-test
 ```
 
 **Expected:** `backup-test` and the configmap exist again after the API server comes back.

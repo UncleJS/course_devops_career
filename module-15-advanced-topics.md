@@ -686,7 +686,7 @@ spec:
 ```bash
 # Install Kiali dashboard (service mesh observability UI)
 kubectl apply -f samples/addons/kiali.yaml
-kubectl port-forward svc/kiali -n istio-system 20001:20001
+kubectl port-forward svc/kiali -n istio-system 20001:20001 >/tmp/kiali-pf.log 2>&1 &
 
 # mTLS inspection: certificates on the sidecar
 POD=$(kubectl get pod -n production -o jsonpath='{.items[0].metadata.name}')
@@ -778,13 +778,11 @@ linkerd viz stat deployments -n production
 linkerd viz stat routes -n production deploy/my-api-stable
 linkerd viz stat routes -n production deploy/my-api-canary
 
-# Top — live traffic view
-linkerd viz top deploy/my-api-stable -n production
-linkerd viz top deploy/my-api-canary -n production
-
-# Tap — live request inspection
-linkerd viz tap deploy/my-api-stable -n production
-linkerd viz tap deploy/my-api-canary -n production
+# Top and tap stream until interrupted.
+# linkerd viz top deploy/my-api-stable -n production
+# linkerd viz top deploy/my-api-canary -n production
+# linkerd viz tap deploy/my-api-stable -n production
+# linkerd viz tap deploy/my-api-canary -n production
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1924,11 +1922,12 @@ linkerd check
 linkerd viz stat deployments -n production
 linkerd viz stat routes -n production deploy/my-api-stable
 linkerd viz stat routes -n production deploy/my-api-canary
-linkerd viz top deploy/my-api-stable -n production
-linkerd viz top deploy/my-api-canary -n production
-linkerd viz tap deploy/my-api-stable -n production
-linkerd viz tap deploy/my-api-canary -n production
-linkerd viz dashboard
+# linkerd viz top and tap stream until interrupted. dashboard opens a browser.
+# linkerd viz top deploy/my-api-stable -n production
+# linkerd viz top deploy/my-api-canary -n production
+# linkerd viz tap deploy/my-api-stable -n production
+# linkerd viz tap deploy/my-api-canary -n production
+# linkerd viz dashboard
 linkerd viz edges deployment -n production
 ```
 

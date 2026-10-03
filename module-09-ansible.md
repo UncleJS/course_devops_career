@@ -738,11 +738,9 @@ flowchart LR
 ```
 
 ```bash
-# Create a new encrypted file
-ansible-vault create group_vars/all/secrets.yml
-
-# Edit an encrypted file
-ansible-vault edit group_vars/all/secrets.yml
+# ansible-vault create and edit open an editor, so they stay commented.
+# ansible-vault create group_vars/all/secrets.yml
+# ansible-vault edit group_vars/all/secrets.yml
 
 # Encrypt an existing file
 ansible-vault encrypt group_vars/all/secrets.yml
@@ -756,8 +754,8 @@ ansible-vault view group_vars/all/secrets.yml
 # Encrypt a single string value
 ansible-vault encrypt_string 'mysecretpassword' --name 'db_password'
 
-# Run playbook with vault password
-ansible-playbook site.yml --ask-vault-pass
+# --ask-vault-pass prompts, so it stays commented.
+# ansible-playbook site.yml --ask-vault-pass
 ansible-playbook site.yml --vault-password-file .vault_password
 ```
 
@@ -1135,9 +1133,21 @@ cat > install-nginx.yml <<'EOF'
         src: files/index.html
         dest: /var/www/html/index.html
 EOF
+```
+
+```bash
 ansible-playbook -i inventory install-nginx.yml --ask-become-pass
+```
+
+```bash
 curl -fsS http://127.0.0.1/
+```
+
+```bash
 ansible-playbook -i inventory install-nginx.yml --ask-become-pass
+```
+
+```bash
 ansible-playbook -i inventory install-nginx.yml --check --ask-become-pass
 ```
 
@@ -1217,8 +1227,17 @@ cat > site.yml <<'EOF'
   roles:
     - webserver
 EOF
+```
+
+```bash
 ansible-playbook -i inventory site.yml --ask-become-pass
+```
+
+```bash
 ansible-playbook -i inventory site.yml --ask-become-pass
+```
+
+```bash
 systemctl is-active nginx
 ```
 

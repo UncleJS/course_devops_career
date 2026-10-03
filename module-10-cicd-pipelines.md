@@ -366,7 +366,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
-            type=sha,prefix=sha-
+            type=sha,format=long,prefix=sha-
 
       - name: Build and push
         uses: docker/build-push-action@v5
@@ -587,13 +587,17 @@ build-image:
     - if: $CI_COMMIT_BRANCH == "main"
 
 # ─── Deploy Stage ──────────────────────────────────────────
-# Pin kubectl to registry.k8s.io/kubectl:v1.32.2 on the runner.
-# That image's entrypoint is kubectl and it has no shell, so these jobs use the runner image.
+# ubuntu:24.04 has a shell. registry.k8s.io/kubectl has no shell, and bitnami/kubectl:latest is not pinned.
 deploy-staging:
   stage: deploy
+  image: ubuntu:24.04
   environment:
     name: staging
     url: https://staging.example.com
+  before_script:
+    - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates
+    - curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.32.2/bin/linux/amd64/kubectl
+    - chmod 755 /usr/local/bin/kubectl
   script:
     - echo "$KUBECONFIG_CONTENT" | base64 -d > "$KUBECONFIG_PATH"
     - export KUBECONFIG="$KUBECONFIG_PATH"
@@ -604,9 +608,14 @@ deploy-staging:
 
 deploy-production:
   stage: deploy
+  image: ubuntu:24.04
   environment:
     name: production
     url: https://app.example.com
+  before_script:
+    - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates
+    - curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.32.2/bin/linux/amd64/kubectl
+    - chmod 755 /usr/local/bin/kubectl
   script:
     - echo "$KUBECONFIG_CONTENT" | base64 -d > "$KUBECONFIG_PATH"
     - export KUBECONFIG="$KUBECONFIG_PATH"
@@ -622,6 +631,11 @@ deploy-production:
 ```yaml
 # Define a reusable template
 .deploy-template: &deploy-template
+  image: ubuntu:24.04
+  before_script:
+    - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates
+    - curl -fsSLo /usr/local/bin/kubectl https://dl.k8s.io/release/v1.32.2/bin/linux/amd64/kubectl
+    - chmod 755 /usr/local/bin/kubectl
   script:
     - echo $KUBECONFIG | base64 -d > /tmp/kubeconfig
     - export KUBECONFIG=/tmp/kubeconfig
@@ -1051,7 +1065,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
-            type=sha,prefix=sha-
+            type=sha,format=long,prefix=sha-
 
       - uses: docker/build-push-action@v5
         with:
@@ -1247,11 +1261,75 @@ pipeline {
 
 ### Lab 10.1 — GitHub Actions: Basic CI
 
-1. Create a GitHub repository with a simple Node.js or Python app
-2. Create `.github/workflows/ci.yml`
-3. Add a job that checks out code, installs dependencies, and runs tests
-4. Push the branch and open the Actions tab
-5. Introduce a failing test, push again, and watch that run fail
+Create a GitHub repository and add these files. The workflow is the Basic Workflow from this chapter (`.github/workflows/ci.yml`). Run `npm install` once so `npm ci` has a `package-lock.json`.
+
+```json
+{
+  "name": "ci-lab",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node test.js",
+    "lint": "node --check test.js"
+  }
+}
+```
+
+```javascript
+const assert = require('node:assert');
+assert.strictEqual(1 + 1, 2);
+console.log('pass');
+```
+
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json test.js ./
+CMD ["node", "test.js"]
+```
+
+```yaml
+# .github/workflows/ci.yml
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: coverage/
+```
+
+Save `package.json`, `test.js`, and `Dockerfile` at the repository root, then push. Open the Actions tab. Change `test.js` so the assertion fails, push again, and watch that run fail.
 
 **Expected:** The first run is green. The run after the failing test is red, and the test step is the one marked failed.
 
@@ -1259,23 +1337,114 @@ pipeline {
 
 ### Lab 10.2 — Build & Push Container Image (GitHub Actions)
 
-1. Extend the workflow so it builds a Docker image
-2. Log in to GHCR with `secrets.GITHUB_TOKEN` on a job that has `packages: write`
-3. Lowercase the image name before tagging
-4. Push on every merge to `main`, tagged with the commit SHA
-5. Open the package page for the repository
+Use the same `package.json`, `test.js`, and `Dockerfile` as Lab 10.1. The workflow is Build & Push Docker Image from this chapter (`.github/workflows/docker.yml`). The SHA tag is `type=sha,format=long,prefix=sha-`, which matches a later deploy of `sha-${{ github.event.workflow_run.head_sha }}`.
 
-**Expected:** GitHub Packages lists an image whose tag matches the commit SHA. The login step uses the same `GITHUB_TOKEN` the `packages: write` permission applies to.
+```yaml
+# .github/workflows/docker.yml
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lowercase image name
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,format=long,prefix=sha-
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+```
+
+Push to `main` and open the package page for the repository.
+
+**Expected:** GitHub Packages lists an image whose tag is `sha-` plus the full commit SHA. The login step uses the same `GITHUB_TOKEN` the `packages: write` permission applies to.
 
 **Cleanup:** In the package settings, delete the image versions this lab pushed, or delete the practice repository.
 
 ### Lab 10.3 — GitLab Pipeline with Stages
 
-1. Create a GitLab project
-2. Write a `.gitlab-ci.yml` with stages `build`, `test`, and `deploy-staging`
-3. Use GitLab's built-in container registry for the image job
-4. For the Docker job, set `DOCKER_TLS_CERTDIR`, `DOCKER_HOST` (`tcp://docker:2376`), and `DOCKER_CERT_PATH`
-5. Add a masked CI/CD variable named `FAKE_API_KEY` and print it from a job with `echo "$FAKE_API_KEY"`
+Create a GitLab project. Reuse the Lab 10.2 `Dockerfile`. Save this as `.gitlab-ci.yml`. The Docker job copies the chapter DinD settings: `DOCKER_TLS_CERTDIR`, `DOCKER_HOST` (`tcp://docker:2376`), and `DOCKER_CERT_PATH`.
+
+In Settings → CI/CD → Variables, add a masked variable `FAKE_API_KEY` with value `ZmFrZS1rZXk=`.
+
+```yaml
+# .gitlab-ci.yml
+stages:
+  - build
+  - test
+  - deploy-staging
+
+variables:
+  DOCKER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+
+build:
+  stage: build
+  image: docker:24
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_CERT_PATH: "/certs/client"
+  before_script:
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - docker build -t "$DOCKER_IMAGE" .
+    - docker push "$DOCKER_IMAGE"
+
+test:
+  stage: test
+  image: alpine:3.20
+  script:
+    - echo "$FAKE_API_KEY"
+
+deploy-staging:
+  stage: deploy-staging
+  image: alpine:3.20
+  script:
+    - echo "deploy $DOCKER_IMAGE"
+```
 
 **Expected:** The pipeline graph shows the three stages in order. The job log prints `[masked]` where the variable value would have appeared.
 
@@ -1283,13 +1452,46 @@ pipeline {
 
 ### Lab 10.4 — Jenkins Pipeline
 
+Wait until Jenkins writes the initial admin password, then read it.
+
 ```bash
 docker run -d --name jenkins-lab -p 8080:8080 jenkins/jenkins:lts
+until docker exec jenkins-lab test -f /var/jenkins_home/secrets/initialAdminPassword; do sleep 2; done
 docker exec jenkins-lab cat /var/jenkins_home/secrets/initialAdminPassword
 ```
 
+Save this `Jenkinsfile`. The Deploy stage uses `input` and does not use `when { branch 'main' }`.
+
+```groovy
+// Jenkinsfile
+pipeline {
+    agent any
+    stages {
+        stage('Build') {
+            steps {
+                sh 'echo build'
+            }
+        }
+        stage('Test') {
+            steps {
+                sh 'echo test'
+            }
+        }
+        stage('Deploy') {
+            input {
+                message "Deploy?"
+                ok "Deploy"
+            }
+            steps {
+                sh 'echo deploy'
+            }
+        }
+    }
+}
+```
+
 1. Open `http://localhost:8080`, install the suggested plugins, and finish setup
-2. Create a Pipeline job that uses a Jenkinsfile with build, test, and a deploy stage that waits for input
+2. Create a Pipeline job that uses this Jenkinsfile
 3. Run the job and open the Pipeline stage view
 
 **Expected:** The stage view shows build and test as successful, and the deploy stage paused until you approve it.

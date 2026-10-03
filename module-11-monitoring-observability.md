@@ -42,16 +42,10 @@ Monitoring and observability are the foundation of reliable production systems. 
 
 By the end of this module, you will be able to:
 
-- Explain the three pillars of observability (metrics, logs, traces)
-- Install and configure Prometheus with exporters and Alertmanager
-- Write PromQL queries from basic to advanced
-- Build production-grade Grafana dashboards with alerting
-- Deploy and operate Zabbix for infrastructure and application monitoring
-- Configure Zabbix agents, SNMP targets, triggers, and actions
-- Use the Zabbix API to automate host registration
-- Design SLIs/SLOs and calculate error budgets
-- Choose the right monitoring tool for a given context
-- Instrument a service with OpenTelemetry and visualize distributed traces in Jaeger or Tempo
+- Start Prometheus and Grafana with the lab Compose file and a provisioned Prometheus datasource
+- Run the PromQL queries in Lab 2
+- Install `zabbix-agent2` and link the Linux by Zabbix agent 2 template
+- Create a 1-minute idle trigger and fire it with `stress`
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -269,6 +263,11 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
         action: keep
         regex: "true"
+      - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: (.+);(.+)
+        replacement: $1:$2
+        target_label: __address__
       - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
         action: replace
         target_label: __metrics_path__
@@ -399,7 +398,7 @@ http_requests_total[5m]
 # Rate of increase (for counters) — prefer rate() over irate()
 rate(http_requests_total[5m])
 
-# Instant rate (last two samples — spiky, use for dashboards)
+# rate() is for dashboards and alerts. irate() is the last two samples.
 irate(http_requests_total[1m])
 
 # Increase over time window
@@ -1022,7 +1021,7 @@ Items define **what** data to collect. Each item has a **key** that specifies th
 | `system.cpu.util[,idle]` | CPU idle % | Zabbix agent |
 | `vm.memory.size[available]` | Available memory bytes | Zabbix agent |
 | `vfs.fs.size[/,pfree]` | Free disk % on / | Zabbix agent |
-| `net.if.in[eth0]` | Network in bytes/sec | Zabbix agent |
+| `net.if.in[eth0]` | Incoming byte counter on eth0 | Zabbix agent |
 | `proc.num[nginx]` | Number of nginx processes | Zabbix agent |
 | `web.test.fail[My web scenario]` | Web scenario last failed step | Web |
 | `snmp.walk[1.3.6.1.2.1.1.5.0]` | SNMP OID — sysName | SNMP |
@@ -1264,9 +1263,9 @@ Steps:
 
 | Item key | Description |
 |----------|-------------|
-| `web.test.fail[Checkout Flow]` | Step number that failed (0 = success) |
-| `web.test.time[Checkout Flow,Load homepage,resp]` | Response time for step |
-| `web.test.rspcode[Checkout Flow,Submit login]` | HTTP status code |
+| `web.test.fail[E-commerce Checkout Flow]` | Step number that failed (0 = success) |
+| `web.test.time[E-commerce Checkout Flow,Load homepage,resp]` | Response time for step |
+| `web.test.rspcode[E-commerce Checkout Flow,Submit login]` | HTTP status code |
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -1538,7 +1537,7 @@ flowchart TD
 | **SLI** | Service Level Indicator — measurable metric | HTTP success rate (non-5xx / total) |
 | **SLO** | Service Level Objective — target for an SLI | 99.9% success rate over 30 days |
 | **SLA** | Service Level Agreement — contractual commitment with penalties | 99.5% uptime or 10% credit |
-| **Error Budget** | How much the service can fail while meeting SLO | 0.1% = 43.8 min/month |
+| **Error Budget** | How much the service can fail while meeting SLO | 0.1% = 43.2 min/month |
 
 ### Error budget calculation
 
@@ -1718,17 +1717,19 @@ service:
       exporters: [prometheus]
 ```
 
+The config above uses a Jaeger exporter. The `otel/opentelemetry-collector` image does not include that exporter. Use `otel/opentelemetry-collector-contrib`, or replace the Jaeger exporter with an OTLP exporter aimed at Jaeger on port 4317.
+
 ```bash
-# Deploy collector + Jaeger with Docker Compose for local dev
+# Jaeger UI is 16686. Collector gRPC is 14250.
+docker run -d --name jaeger \
+  -p 16686:16686 \
+  -p 14250:14250 \
+  jaegertracing/all-in-one:latest
+
 docker run -d --name otel-collector \
   -p 4317:4317 -p 4318:4318 \
-  -v $(pwd)/otel-collector-config.yaml:/etc/otelcol/config.yaml \
-  otel/opentelemetry-collector:latest
-
-docker run -d --name jaeger \
-  -p 16686:16686 \    # Jaeger UI
-  -p 14250:14250 \    # gRPC from collector
-  jaegertracing/all-in-one:latest
+  -v $(pwd)/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml \
+  otel/opentelemetry-collector-contrib:latest
 ```
 
 ### Deploying Grafana Tempo (Kubernetes-native traces backend)
@@ -1971,11 +1972,25 @@ receivers:
   - name: default
 ```
 
+Before `docker compose up`, write `grafana/provisioning/datasources/prometheus.yml`. The compose file mounts `./grafana/provisioning` into Grafana, and this file is the Prometheus datasource at `http://prometheus:9090`.
+
+```yaml
+# grafana/provisioning/datasources/prometheus.yml
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+```
+
 **Steps**:
-1. Run `docker compose up -d` (or `podman-compose up -d`)
-2. Open Prometheus at `http://localhost:9090/targets` and confirm `node_exporter:9100` is UP
-3. Open Grafana at `http://localhost:3000` (admin / changeme) and confirm the Prometheus datasource
-4. Import dashboard ID **1860** (Node Exporter Full) from Grafana.com
+1. Write `grafana/provisioning/datasources/prometheus.yml` as shown above
+2. Run `docker compose up -d` (or `podman-compose up -d`)
+3. Open Prometheus at `http://localhost:9090/targets` and confirm `node_exporter:9100` is UP
+4. Open Grafana at `http://localhost:3000` (admin / changeme) and confirm the Prometheus datasource
+5. Import dashboard ID **1860** (Node Exporter Full) from Grafana.com
 
 **Expected:** the node target is UP, and dashboard 1860 shows host CPU and disk series.
 
@@ -1987,18 +2002,37 @@ receivers:
 
 **Goal**: Write 10 PromQL queries targeting your Lab 1 stack.
 
-```
-Exercises:
-1. Show current CPU utilization per CPU core
-2. Show available memory in GB
-3. Calculate % disk used on root filesystem
-4. Show network bytes in/out per second for all interfaces
-5. Count total running processes
-6. Show top 3 filesystem mount points by used percentage
-7. Calculate the 5-minute rate of context switches
-8. Alert expression: disk will be full within 4 hours
-9. Show all targets that are currently down
-10. Calculate node uptime in days
+```promql
+# 1. Current CPU utilization per CPU core
+100 - (rate(node_cpu_seconds_total{mode="idle"}[5m]) * 100)
+
+# 2. Available memory in GB
+node_memory_MemAvailable_bytes / 1024 / 1024 / 1024
+
+# 3. Percent disk used on the root filesystem
+(1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100
+
+# 4. Network bytes in and out per second
+rate(node_network_receive_bytes_total[5m])
+rate(node_network_transmit_bytes_total[5m])
+
+# 5. Processes currently running
+node_procs_running
+
+# 6. Top 3 filesystem mount points by used percentage
+topk(3, (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100)
+
+# 7. Five-minute rate of context switches
+rate(node_context_switches_total[5m])
+
+# 8. Disk full within 4 hours
+predict_linear(node_filesystem_avail_bytes{mountpoint="/"}[1h], 4 * 3600) < 0
+
+# 9. Targets that are down
+up == 0
+
+# 10. Node uptime in days
+(node_time_seconds - node_boot_time_seconds) / 86400
 ```
 
 **Expected:** each query returns a series from the Lab 1 node exporter. Query 8 uses `predict_linear(node_filesystem_avail_bytes[1h], 4*3600)`.
@@ -2009,7 +2043,50 @@ Exercises:
 
 ### Lab 3 — Zabbix Agent Installation & Template Linking (Beginner)
 
-**Goal**: Install Zabbix agent on a monitored host and link the Linux template.
+**Goal**: Install the Zabbix 7.0 server from this chapter, then install Zabbix agent 2 on a monitored host and link `Linux by Zabbix agent 2`.
+
+Start with the chapter server install on the Zabbix server:
+
+```bash
+# Install Zabbix 7.0 repository
+rpm -Uvh https://repo.zabbix.com/zabbix/7.0/rhel/9/x86_64/zabbix-release-latest-7.0.el9.noarch.rpm
+dnf clean all
+
+# Install Zabbix server, frontend, and agent
+dnf install -y zabbix-server-mysql zabbix-web-mysql \
+               zabbix-apache-conf zabbix-sql-scripts \
+               zabbix-selinux-policy zabbix-agent
+
+# Install and configure MariaDB
+dnf install -y mariadb-server
+systemctl enable --now mariadb
+mysql_secure_installation
+```
+
+```sql
+-- Create Zabbix database
+CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE USER 'zabbix'@'localhost' IDENTIFIED BY 'StrongPassword123!';
+GRANT ALL PRIVILEGES ON zabbix.* TO 'zabbix'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+```bash
+# Import initial schema
+zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | mysql --default-character-set=utf8mb4 -uzabbix -p zabbix
+
+# Configure Zabbix server
+# Edit /etc/zabbix/zabbix_server.conf
+DBPassword=StrongPassword123!
+
+# Start services
+systemctl enable --now zabbix-server zabbix-agent httpd php-fpm
+
+# Web setup: http://<server>/zabbix
+# Default credentials: Admin / zabbix  (CHANGE IMMEDIATELY)
+```
+
+The template in this lab is `Linux by Zabbix agent 2`, so the monitored host installs and starts `zabbix-agent2`, not `zabbix-agent`.
 
 ```bash
 # On the monitored host:
@@ -2043,18 +2120,19 @@ zabbix_get -s <monitored_host_ip> -p 10050 -k "system.hostname"
 
 **Goal**: Create a custom trigger and action that sends a Slack notification.
 
-1. Create a **Media type**: Slack webhook
-   - Alerts → Media types → Create
-   - Type: Webhook, Script: use the Slack webhook template
-2. Assign media to your Admin user
+1. Use Zabbix's built-in Slack webhook media type
+   - Alerts → Media types → Slack
+   - Enable that media type and fill its webhook parameters
+   - Do not paste a custom script
+2. Assign that media type to your Admin user
 3. Create a **trigger** on `lab-host-01`:
-   - Expression: `avg(/lab-host-01/system.cpu.util[,idle],5m)<20`
+   - Expression: `avg(/lab-host-01/system.cpu.util[,idle],1m)<20`
    - Name: "High CPU on lab-host-01"
    - Severity: High
 4. Create a **trigger action**:
    - Condition: Trigger severity >= High
-   - Operation: Send message via Slack to Admin
-5. Simulate load: `stress --cpu 4 --timeout 120`
+   - Operation: Send message via the built-in Slack media type to Admin
+5. Install and run stress: `sudo apt install -y stress` then `stress --cpu 4 --timeout 120`
 6. Observe alert in Monitoring → Problems and Slack notification
 
 **Expected:** a High severity problem appears for `lab-host-01` while `stress` runs.

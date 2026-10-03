@@ -48,12 +48,9 @@ By the end of this module you will be able to:
 - Explain DNS resolution and debug DNS problems
 - Identify common ports and protocols by number
 - Understand HTTP request/response cycles including status codes
-- Configure basic firewall rules with `iptables` and `ufw`
-- Explain load balancing strategies and configure HAProxy and Nginx as load balancers
-- Describe Traefik entrypoints, routers, and services. The Docker and Kubernetes examples are for after modules 05 and 06.
-- Diagnose network problems using command-line tools
-- Understand DNS-based load balancing and split-horizon DNS at scale
-- Explain what a service mesh is and when to reach for one
+- Configure firewall rules with `ufw`
+- Configure HAProxy to balance three local HTTP servers
+- Diagnose DNS and HTTP with `dig` and `curl`
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -314,7 +311,8 @@ dig -x 1.2.3.4                      # PTR record for an IP
 
 # Check /etc/hosts first
 cat /etc/hosts                      # Local hostname overrides
-cat /etc/resolv.conf               # Configured DNS resolvers
+cat /etc/resolv.conf               # Ubuntu 24.04: stub resolver at 127.0.0.53
+resolvectl status                  # Upstream resolvers systemd-resolved actually uses
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -562,7 +560,7 @@ flowchart LR
 | **Layer 4** | Transport (TCP/UDP) | IP + port only | AWS NLB, HAProxy TCP mode | Fastest — no HTTP parsing |
 | **Layer 7** | Application (HTTP) | Full request — URL, headers, cookies, body | AWS ALB, Nginx, HAProxy HTTP mode, Traefik | Flexible, feature-rich |
 
-**When to use Layer 4**: ultra-low latency, non-HTTP protocols (MySQL, gRPC, Redis), TLS passthrough.  
+**When to use Layer 4**: ultra-low latency, non-HTTP protocols (MySQL, Redis), and TLS passthrough. gRPC is HTTP/2, so a Layer 7 proxy can route it.  
 **When to use Layer 7**: path-based routing, header manipulation, A/B testing, authentication, canary deployments.
 
 ### Nginx as Load Balancer
@@ -937,8 +935,6 @@ Read this section now. Run it after module 05. The lab for this module does not 
 **`docker-compose.yml` — Traefik + two apps:**
 
 ```yaml
-version: "3.8"
-
 networks:
   traefik-public:
     external: true   # Create once: docker network create traefik-public
@@ -1485,14 +1481,14 @@ External client → Public nameserver  → app.example.com → 203.0.113.1
 **Implementation with BIND/named:**
 
 ```
-# /etc/named.conf
+# Ubuntu 24.04: /etc/bind/named.conf.local
 acl "internal" { 10.0.0.0/8; 172.16.0.0/12; 192.168.0.0/16; };
 
 view "internal" {
     match-clients { "internal"; };
     zone "example.com" {
         type master;
-        file "/etc/named/zones/example.com.internal";
+        file "/etc/bind/example.com.internal";
     };
 };
 
@@ -1500,7 +1496,7 @@ view "external" {
     match-clients { any; };
     zone "example.com" {
         type master;
-        file "/etc/named/zones/example.com.external";
+        file "/etc/bind/example.com.external";
     };
 };
 ```
@@ -1531,7 +1527,7 @@ app.example.com.  60  IN  A  203.0.113.3
 | `3600s (1 hr)` | Stable services you rarely change |
 | `86400s (24 hr)` | Static infrastructure (mail servers, NS records) |
 
-> **Migration tip**: Before changing a DNS record, lower the TTL to 60 seconds several hours in advance. After the migration, raise it back. This minimizes the window where stale records are cached.
+> **Migration tip**: Lower the TTL, then wait out the previous TTL before you change the record. If the old TTL is one day, "several hours" is not enough. Raise the TTL after the cutover.
 
 ### Route 53 Routing Policies
 
@@ -1742,14 +1738,16 @@ Run this on a VM you can reach from the console. Allow SSH before `ufw enable`.
 ```bash
 sudo apt install ufw
 sudo ufw default deny incoming
-sudo ufw allow 22/tcp
 sudo ufw allow 80/tcp
 sudo ufw limit 22/tcp
 sudo ufw --force enable
 sudo ufw status verbose
+ip -4 -br addr
 ```
 
-**Expected:** Status is `active`. Rules include `22/tcp ALLOW` and `22/tcp LIMIT`, plus `80/tcp ALLOW`. A connection to a port you did not allow, such as `nc -zv localhost 8080`, is denied or times out.
+`ufw limit` must be the SSH rule. An earlier `ufw allow 22/tcp` would match first and the limit would never run. `ufw` allows the loopback interface, so `nc` to `localhost` does not test the firewall.
+
+**Expected:** Status is `active`. Rules include `22/tcp LIMIT` and `80/tcp ALLOW`. `nc -zv -w 3 <vm-address> 8080` times out. `nc -zv localhost 8080` is connection refused if nothing is listening, which is not a firewall drop.
 
 **Cleanup:** `sudo ufw disable`
 

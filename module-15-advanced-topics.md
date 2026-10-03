@@ -19,10 +19,15 @@
 - [Learning Objectives](#learning-objectives)
 - [GitOps](#gitops)
 - [Service Mesh](#service-mesh)
+- [Kubernetes Operators & CRDs](#kubernetes-operators--crds)
 - [Advanced Terraform Patterns](#advanced-terraform-patterns)
 - [Platform Engineering](#platform-engineering)
+- [FinOps — Cloud Cost Management](#finops--cloud-cost-management)
+- [AI & LLMs in DevOps](#ai--llms-in-devops)
 - [Advanced: Chaos Engineering](#advanced-chaos-engineering)
 - [Capstone Project](#capstone-project)
+- [Career Paths & Certification Roadmap](#career-paths--certification-roadmap)
+- [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
 
@@ -40,15 +45,9 @@ This final module covers advanced concepts that separate senior DevOps engineers
 
 By the end of this module, you will be able to:
 
-- Explain GitOps principles and implement them with ArgoCD and Flux
-- Deploy and configure ArgoCD for multi-cluster GitOps
-- Install Istio/Linkerd and implement mTLS, traffic management, and observability
-- Explain what Kubernetes Operators are and build a basic one
-- Apply advanced Terraform patterns (workspaces, modules, remote state, Terragrunt)
-- Describe Platform Engineering and Internal Developer Platforms (IDPs)
-- Implement basic FinOps practices and right-size cloud resources
-- Complete the capstone project integrating all DevOps disciplines
-- Design and execute chaos experiments to validate system resilience
+- Install Argo CD and sync an Application from a Git repository
+- Confirm Istio mTLS with `istioctl proxy-config secret` and apply a traffic split
+- Build the capstone API image, deploy it, and read it through a port-forward on 8081
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -544,7 +543,7 @@ kubectl get pods -n production -o jsonpath='{range .items[*]}{.metadata.name}: {
 
 ```yaml
 # Route 90% to v1, 10% to v2 (canary)
-apiVersion: networking.istio.io/v1beta1
+apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
   name: my-api
@@ -575,7 +574,7 @@ spec:
 #### DestinationRule — define subsets and circuit breaking
 
 ```yaml
-apiVersion: networking.istio.io/v1beta1
+apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
   name: my-api
@@ -607,7 +606,7 @@ spec:
 
 ```yaml
 # Deny all traffic by default in production namespace
-apiVersion: security.istio.io/v1beta1
+apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
   name: deny-all
@@ -615,7 +614,7 @@ metadata:
 spec: {}  # Empty spec = deny all
 ---
 # Allow frontend to call my-api
-apiVersion: security.istio.io/v1beta1
+apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
   name: allow-frontend-to-api
@@ -639,7 +638,7 @@ spec:
 
 ```yaml
 # Strict mTLS for entire namespace
-apiVersion: security.istio.io/v1beta1
+apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
   name: default
@@ -653,7 +652,7 @@ spec:
 
 ```yaml
 # Inject 5 second delay for 10% of requests to test-service
-apiVersion: networking.istio.io/v1beta1
+apiVersion: networking.istio.io/v1
 kind: VirtualService
 metadata:
   name: test-service
@@ -682,7 +681,10 @@ spec:
 kubectl apply -f samples/addons/kiali.yaml
 kubectl port-forward svc/kiali -n istio-system 20001:20001
 
-# Check mTLS status
+# mTLS inspection: certificates on the sidecar
+istioctl proxy-config secret <pod-name> -n production
+
+# Authorization check. This is not an mTLS inspection.
 istioctl x authz check <pod-name> -n production
 
 # Check proxy configuration
@@ -738,7 +740,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: my-api-canary
-  namespace: lab
+  namespace: production
 spec:
   parentRefs:
     - name: my-api
@@ -756,17 +758,20 @@ spec:
 ```
 
 ```bash
-# Check golden metrics per service
+# Same namespace and backend names as the HTTPRoute above (my-api-stable, my-api-canary)
 linkerd viz stat deployments -n production
 
 # Check per-route metrics
-linkerd viz stat routes -n production deploy/my-api
+linkerd viz stat routes -n production deploy/my-api-stable
+linkerd viz stat routes -n production deploy/my-api-canary
 
 # Top — live traffic view
-linkerd viz top deploy/my-api -n production
+linkerd viz top deploy/my-api-stable -n production
+linkerd viz top deploy/my-api-canary -n production
 
 # Tap — live request inspection
-linkerd viz tap deploy/my-api -n production
+linkerd viz tap deploy/my-api-stable -n production
+linkerd viz tap deploy/my-api-canary -n production
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1842,10 +1847,10 @@ DevOps Engineer
 
 ```
 Month 1-3:  Linux, scripting, and networking (Modules 01-03)
-Month 3-6:  Containers and Kubernetes (Modules 05-06)
+Month 3-6:  Git (Module 04), then containers and Kubernetes (Modules 05-06)
             Optional CKA exam practice only after Module 06.
             This course does not promise you will pass the exam.
-Month 6-9:  Cloud and IaC (Modules 07-08)
+Month 6-9:  Cloud, IaC, and Ansible (Modules 07-09)
 Month 9-12: CI/CD, monitoring, and logging (Modules 10-12)
 Month 12+:  Security, HA, and the capstone (Modules 13-15)
 ```
@@ -1891,7 +1896,8 @@ istioctl verify-install
 istioctl analyze -n production
 istioctl proxy-config clusters <pod> -n production
 istioctl proxy-config routes <pod> -n production
-istioctl x authz check <pod> -n production
+istioctl proxy-config secret <pod> -n production
+istioctl x authz check <pod> -n production          # authorization check, not mTLS
 istioctl dashboard kiali
 istioctl dashboard jaeger
 ```
@@ -1901,8 +1907,12 @@ istioctl dashboard jaeger
 ```bash
 linkerd check
 linkerd viz stat deployments -n production
-linkerd viz top deploy/my-api -n production
-linkerd viz tap deploy/my-api -n production
+linkerd viz stat routes -n production deploy/my-api-stable
+linkerd viz stat routes -n production deploy/my-api-canary
+linkerd viz top deploy/my-api-stable -n production
+linkerd viz top deploy/my-api-canary -n production
+linkerd viz tap deploy/my-api-stable -n production
+linkerd viz tap deploy/my-api-canary -n production
 linkerd viz dashboard
 linkerd viz edges deployment -n production
 ```
@@ -2111,6 +2121,8 @@ spec:
       labels:
         app: capstone-api
     spec:
+      imagePullSecrets:
+        - name: ghcr-pull
       containers:
         - name: api
           image: ghcr.io/YOUR_GITHUB_USER/capstone-api:latest
@@ -2161,10 +2173,19 @@ jobs:
           severity: CRITICAL
 ```
 
-Install Argo CD 3.1.0 with the Lab 1 commands, including `argocd login`, then:
+Install Argo CD 3.1.0 with the Lab 1 commands, including `argocd login`. Lab 1 already binds local port 8080, so this lab forwards the API to 8081.
+
+GHCR packages are private by default. Either make `capstone-api` public, or create a docker-registry secret. The Deployment above sets `imagePullSecrets` to `ghcr-pull`. If you make the package public, omit `imagePullSecrets` from `k8s/deployment.yaml`.
 
 ```bash
-kubectl apply -f - << 'EOF'
+kubectl create secret docker-registry ghcr-pull \
+  --docker-server=ghcr.io \
+  --docker-username=YOUR_GITHUB_USER \
+  --docker-password="$GHCR_TOKEN" \
+  --namespace=default
+
+mkdir -p argocd
+cat > argocd/application.yaml << 'EOF'
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -2185,9 +2206,10 @@ spec:
       selfHeal: true
 EOF
 
+kubectl apply -f argocd/application.yaml
 argocd app sync capstone-api
-kubectl port-forward svc/capstone-api 8080:8080
-curl -s http://127.0.0.1:8080
+kubectl port-forward svc/capstone-api 8081:8080
+curl -s http://127.0.0.1:8081
 ```
 
 **Expected:** the Actions run includes the Trivy step, `argocd app get capstone-api` shows Synced, and `curl` prints `ok`.

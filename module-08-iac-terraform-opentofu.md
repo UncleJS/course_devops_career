@@ -2,7 +2,7 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
-[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 08 of 15](https://img.shields.io/badge/module-08%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate%20%E2%86%92%20Advanced-red) ![Terraform 1.9+](https://img.shields.io/badge/Terraform-1.9%2B-7B42BC?logo=terraform&logoColor=white) ![OpenTofu 1.8+](https://img.shields.io/badge/OpenTofu-1.8%2B-FFDA18?logo=opentofu&logoColor=black) ![HCL · State Management](https://img.shields.io/badge/IaC-HCL%20%C2%B7%20State%20Management-5C4EE5)
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 08 of 15](https://img.shields.io/badge/module-08%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate%20%E2%86%92%20Advanced-red) ![Terraform 1.10+](https://img.shields.io/badge/Terraform-1.10%2B-7B42BC?logo=terraform&logoColor=white) ![OpenTofu 1.10+](https://img.shields.io/badge/OpenTofu-1.10%2B-FFDA18?logo=opentofu&logoColor=black) ![HCL · State Management](https://img.shields.io/badge/IaC-HCL%20%C2%B7%20State%20Management-5C4EE5)
 
 **Prerequisites:** Module 07.
 
@@ -165,7 +165,7 @@ Installation is the smallest part of getting productive with IaC, but it is stil
 ### Terraform
 
 ```bash
-# Ubuntu/Debian
+# Ubuntu/Debian — HashiCorp apt repo. This module requires Terraform 1.10 or newer.
 wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
 sudo apt update && sudo apt install terraform
@@ -176,12 +176,8 @@ terraform version
 ### OpenTofu
 
 ```bash
-# Ubuntu/Debian — official installer
-curl --proto '=https' --tlsv1.2 -fsSL https://get.opentofu.org/install-opentofu.sh | sudo sh -s -- --install-method deb
-
-# Or via GitHub release. 1.9.1 satisfies the OpenTofu 1.8+ badge.
-# S3 native lock files in the remote-state section need Terraform 1.10+ or current OpenTofu.
-TOFU_VERSION="1.9.1"
+# GitHub release zip. Pin 1.10.0 (1.10 or newer).
+TOFU_VERSION="1.10.0"
 curl -Lo tofu.zip "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.zip"
 unzip tofu.zip && sudo mv tofu /usr/local/bin/
 
@@ -223,7 +219,7 @@ terraform {
       version = "~> 5.0"
     }
   }
-  required_version = ">= 1.9.0"
+  required_version = ">= 1.10.0"
 }
 
 provider "aws" {
@@ -261,29 +257,31 @@ resource "aws_subnet" "public" {
 ### HCL Data Types
 
 ```hcl
-# Strings
-name = "production"
-name = "web-${var.environment}"   # String interpolation
+locals {
+  # Strings
+  name               = "production"
+  interpolated_name  = "web-${var.environment}" # String interpolation
 
-# Numbers
-port = 8080
-count = 3
+  # Numbers
+  port  = 8080
+  count = 3
 
-# Booleans
-enabled = true
+  # Booleans
+  enabled = true
 
-# Lists
-availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  # Lists
+  availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
 
-# Maps
-tags = {
-  Environment = "production"
-  Owner       = "devops-team"
-  CostCenter  = "engineering"
+  # Maps
+  tags = {
+    Environment = "production"
+    Owner       = "devops-team"
+    CostCenter  = "engineering"
+  }
+
+  # Conditionals
+  instance_type = var.environment == "production" ? "t3.large" : "t3.micro"
 }
-
-# Conditionals
-instance_type = var.environment == "production" ? "t3.large" : "t3.micro"
 
 # for_each — create multiple resources from a map
 resource "aws_s3_bucket" "env_buckets" {
@@ -294,7 +292,7 @@ resource "aws_s3_bucket" "env_buckets" {
 # count — create N copies of a resource
 resource "aws_instance" "web" {
   count         = 3
-  ami           = data.aws_ami.ubuntu.id
+  ami           = "ami-0123456789abcdef0"
   instance_type = "t3.micro"
   tags = {
     Name = "web-${count.index + 1}"
@@ -461,7 +459,7 @@ locals {
 }
 
 resource "aws_instance" "web" {
-  ami           = data.aws_ami.ubuntu.id
+  ami           = "ami-0123456789abcdef0"
   instance_type = "t3.micro"
   tags          = local.common_tags
 }
@@ -506,8 +504,8 @@ A reliable state strategy answers three questions: where is the state stored, ho
 
 ```hcl
 # backend.tf — AWS S3 backend
-# use_lockfile is the default lock for Terraform 1.10+ and current OpenTofu.
-# dynamodb_table is the legacy lock. The bucket name must be globally unique.
+# use_lockfile is the lock for Terraform 1.10+ and current OpenTofu.
+# The bucket name must be globally unique.
 terraform {
   backend "s3" {
     bucket       = "mycompany-terraform-state"
@@ -517,9 +515,12 @@ terraform {
     encrypt      = true
   }
 }
+```
 
-# OpenTofu also supports S3, GCS, Azure Blob, HTTP, and more
-# backend.tf — GCS backend
+OpenTofu also supports S3, GCS, Azure Blob, HTTP, and more.
+
+```hcl
+# gcs-backend.tf — GCS backend in its own file
 terraform {
   backend "gcs" {
     bucket = "mycompany-tofu-state"
@@ -639,9 +640,8 @@ module "vpc" {
   azs            = ["us-east-1a", "us-east-1b"]
 }
 
-# ami comes from the Canonical data source in HCL fundamentals
 resource "aws_instance" "web" {
-  ami           = data.aws_ami.ubuntu.id
+  ami           = "ami-0123456789abcdef0"
   instance_type = "t3.micro"
   subnet_id     = module.vpc.public_subnet_ids[0]
 }
@@ -919,7 +919,7 @@ data "terraform_remote_state" "network" {
 }
 
 resource "aws_instance" "app" {
-  ami           = data.aws_ami.ubuntu.id
+  ami           = "ami-0123456789abcdef0"
   instance_type = "t3.micro"
   subnet_id     = data.terraform_remote_state.network.outputs.private_subnet_id
 }
@@ -1051,16 +1051,17 @@ rm terraform.tfstate terraform.tfstate.backup
 
 ## Hands-On Labs
 
-Lab 8.1 is local. Labs 8.2–8.5 need AWS credentials in your environment. S3 bucket names are global, so these labs put your account id in the name. These labs are a concept foundation for the Terraform Associate exam.
+Lab 8.1 is local. Labs 8.2–8.5 need AWS credentials in your environment. S3 bucket names are global, so these labs put your account id in the name. OpenTofu is the same commands with `tofu`. These labs are a concept foundation for the Terraform Associate exam.
 
-### Lab 8.1 — Install Both Tools
+### Lab 8.1 — Install Terraform
+
+The lab steps use `terraform`. OpenTofu 1.10 or newer accepts the same commands as `tofu`.
 
 ```bash
 terraform version
-tofu version
 ```
 
-**Expected:** `terraform version` prints 1.9 or newer. If you used the install pin above, `tofu version` prints `1.9.1`.
+**Expected:** `terraform version` prints 1.10 or newer.
 
 **Teardown:** nothing was created in a cloud account.
 
@@ -1074,7 +1075,7 @@ mkdir -p ~/labs/module-08-bucket && cd ~/labs/module-08-bucket
 
 ```hcl
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = ">= 1.10.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -1104,9 +1105,9 @@ aws s3 ls | grep lab08-
 terraform destroy -auto-approve
 ```
 
-**Expected:** plan prints `Plan: 1 to add, 0 to change, 0 to destroy.` Apply prints `Apply complete! Resources: 1 added, 0 changed, 0 destroyed.` `aws s3 ls` shows `lab08-<account-id>-demo`. Destroy prints `Destroy complete! Resources: 1 destroyed.` Repeat the same files with `tofu init`, `tofu plan`, `tofu apply -auto-approve`, and `tofu destroy -auto-approve`.
+**Expected:** plan prints `Plan: 1 to add, 0 to change, 0 to destroy.` Apply prints `Apply complete! Resources: 1 added, 0 changed, 0 destroyed.` `aws s3 ls` shows `lab08-<account-id>-demo`. Destroy prints `Destroy complete! Resources: 1 destroyed.`
 
-**Teardown:** `terraform destroy` or `tofu destroy` removes the bucket. `rm -rf ~/labs/module-08-bucket`.
+**Teardown:** `terraform destroy` removes the bucket. `rm -rf ~/labs/module-08-bucket`.
 
 ### Lab 8.3 — Variables & Outputs
 
@@ -1125,7 +1126,7 @@ variable "environment" {
 
 ```hcl
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = ">= 1.10.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -1225,7 +1226,7 @@ output "bucket_arn" { value = aws_s3_bucket.this.arn }
 
 ```hcl
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = ">= 1.10.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -1265,7 +1266,7 @@ terraform destroy -auto-approve
 
 ### Lab 8.5 — Remote State
 
-Use Terraform 1.10+ or current OpenTofu. This backend sets `use_lockfile = true`. DynamoDB locking is the legacy option in the remote-state section; do not add it here.
+This backend needs Terraform 1.10 or newer (`use_lockfile = true`). DynamoDB locking is the legacy option in its own file in the remote-state section; do not add it here.
 
 ```bash
 mkdir -p ~/labs/module-08-remote && cd ~/labs/module-08-remote

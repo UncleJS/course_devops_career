@@ -59,19 +59,16 @@ flowchart TD
 
 By the end of this module you will be able to:
 
-- Navigate a Linux filesystem and manage files and directories confidently
-- Read, search, and manipulate file contents from the command line
-- Understand and configure file permissions and ownership
-- Edit files using `vi`/`vim` and `nano`
-- Pipe commands together and redirect input/output
-- Monitor and manage running processes
-- Connect to remote servers securely using SSH
-- Use `sudo`, `su`, and manage user accounts
-- Chain multiple commands to solve real-world tasks
-- Configure environment variables and customize your shell environment
-- Diagnose performance bottlenecks using CPU, memory, and I/O tools
-- Manage disk partitions, filesystems, and mounts
-- Apply basic kernel tuning and Linux security hardening
+- Navigate a Linux filesystem and manage files and directories
+- Read and search file contents from the command line
+- Set file modes and grant one ACL
+- Pipe commands together and redirect input and output
+- Inspect a process and stop it
+- Generate an SSH key pair
+- Use `sudo` and tell Ubuntu's `sudo` group from Rocky's `wheel` group
+- Chain `find`, `grep`, and `du`
+- Add an alias and a shell function to `~/.bashrc`
+- Read `vmstat`, `iostat`, and `journalctl`
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -662,8 +659,8 @@ getent passwd alice             # Look up user info
 # sudoers — fine-grained sudo control
 sudo visudo                     # Edit /etc/sudoers safely
 # Allow alice to run these commands with any arguments:
-# alice ALL=(ALL) /usr/bin/systemctl, /usr/bin/apt
-# On Rocky the binary paths are the same; the admin group is wheel, not sudo.
+# Ubuntu: alice ALL=(ALL) /usr/bin/systemctl, /usr/bin/apt
+# Rocky:  alice ALL=(ALL) /usr/bin/systemctl, /usr/bin/dnf
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -700,7 +697,7 @@ ip link show                # Show interface status
 uname -a            # Full kernel and system information
 uname -r            # Kernel version only
 hostname            # Show system hostname
-hostname -I         # Ubuntu/Debian: all non-loopback IPs (not on Rocky)
+hostname -I         # All non-loopback IPs (Ubuntu and Rocky 9)
 ip -4 -br addr      # All distros: IPv4 addresses per interface
 hostnamectl         # Show and set hostname (systemd systems)
 who                 # Show who is logged in
@@ -1197,7 +1194,7 @@ hping3 -S -p 443 -c 100 example.com  # TCP latency (SYN packets)
 
 # Quick snapshot tools
 sar -A 1 5          # All stats via sysstat
-dstat               # Combined CPU/disk/net/mem stats
+dool                # Combined CPU/disk/net/mem stats (sudo apt install dool)
 
 # Performance investigation workflow
 uptime              # 1. Check load average
@@ -1257,7 +1254,7 @@ sudo mount -a           # Apply all fstab entries without rebooting
 
 # Filesystem health
 sudo e2fsck -n /dev/sdb1    # Check ext4 (dry-run, read-only)
-sudo xfs_check /dev/sdb1    # Check XFS
+sudo xfs_repair -n /dev/sdb1  # Check XFS without changing it; filesystem must be unmounted
 df -iH                       # Show inode usage (can run out before disk space!)
 ```
 
@@ -1343,14 +1340,15 @@ ulimit -a               # Show all limits for current shell
 ulimit -n               # Max open file descriptors
 ulimit -n 65536         # Set max open files (current session)
 
-# Persistent limits via /etc/security/limits.conf
+# limits.conf applies to login shells, not to a systemd service.
 sudo tee -a /etc/security/limits.conf << 'EOF'
-# Format: <domain> <type> <item> <value>
 *       soft    nofile    65536
 *       hard    nofile    131072
-nginx   soft    nofile    65536
-nginx   hard    nofile    65536
 EOF
+# For nginx, set the limit on the unit:
+#   sudo systemctl edit nginx
+#   [Service]
+#   LimitNOFILE=65536
 ```
 
 ### SSH Hardening
@@ -1366,15 +1364,16 @@ PasswordAuthentication no       # Keys only, no passwords
 PubkeyAuthentication yes
 AuthorizedKeysFile .ssh/authorized_keys
 MaxAuthTries 3                  # Limit brute force attempts
-ClientAliveInterval 300         # Disconnect idle sessions after 5 min
-ClientAliveCountMax 2
+ClientAliveInterval 300         # Probe every 300s
+ClientAliveCountMax 2           # Drop after 2 missed probes (~10 min)
 AllowUsers alice bob            # Whitelist specific users
 AllowGroups sshusers            # Or whitelist a group
 X11Forwarding no                # Disable unless needed
 Banner /etc/ssh/banner.txt      # Show legal notice before login
 
-sudo systemctl restart sshd     # Apply changes
-sudo sshd -t                    # Test config before restarting
+sudo sshd -t                    # Test config before applying it
+sudo systemctl reload ssh      # Ubuntu unit name
+sudo systemctl reload sshd     # Rocky unit name
 ```
 
 ### Fail2ban — Intrusion Prevention

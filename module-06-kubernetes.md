@@ -4,11 +4,11 @@
 
 [![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 06 of 15](https://img.shields.io/badge/module-06%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate%20%E2%86%92%20Advanced-red) ![Kubernetes v1.31+](https://img.shields.io/badge/Kubernetes-v1.31%2B-326CE5?logo=kubernetes&logoColor=white) ![kubectl 1.31+](https://img.shields.io/badge/kubectl-1.31%2B-326CE5?logo=kubernetes&logoColor=white) ![Helm 3.16+](https://img.shields.io/badge/Helm-3.16%2B-0F1689?logo=helm&logoColor=white) ![CRI-O · containerd](https://img.shields.io/badge/runtime-CRI--O%20%C2%B7%20containerd-grey)
 
-**Prerequisites:** Module 05. kind or minikube, about 4 CPU and 8 GB RAM.
+**Prerequisites:** Module 05. minikube, about 4 CPU and 8 GB RAM.
 
 **Time:** About 10 hours, including the labs.
 
-**Lab:** Local kind or minikube. No cloud account. Not a CKA or CKAD exam drill.
+**Lab:** Local minikube. No cloud account. Not a CKA or CKAD exam drill.
 
 ---
 
@@ -83,23 +83,13 @@ flowchart TD
 
 By the end of this module you will be able to:
 
-- Explain the Kubernetes control plane and worker node architecture
-- Create and manage Pods, Deployments, and Services using YAML manifests
-- Use `kubectl` fluently for cluster management
-- Store configuration in ConfigMaps and sensitive data in Secrets
-- Explain the four Service types and when to use each one
-- Explain how kube-proxy implements Service routing (iptables vs IPVS modes)
-- Configure Ingress to route external HTTP/HTTPS traffic
-- Compare ingress-nginx, Traefik, and HAProxy Ingress controllers
-- Use the Gateway API (HTTPRoute, GatewayClass, Gateway) for next-generation routing
-- Set up persistent storage with PersistentVolumes and PersistentVolumeClaims
-- Configure liveness and readiness probes for self-healing
-- Set resource requests/limits and configure Horizontal Pod Autoscaler
-- Use Helm to install and manage applications
-- Apply RBAC to control access to cluster resources
-- Write NetworkPolicy manifests to restrict pod-to-pod traffic
-- Apply Pod Security Standards (Baseline / Restricted) to namespaces
-- Use Kustomize to manage environment-specific overlays (staging vs production)
+- Start a local minikube cluster and read its nodes
+- Create a Deployment and a Service from a YAML manifest
+- Store configuration in a ConfigMap and sensitive data in a Secret
+- Set resource requests and scale a Deployment with the Horizontal Pod Autoscaler
+- Create a chart with `helm create`, install it, and upgrade it
+- Write a NetworkPolicy that restricts pod-to-pod traffic
+- Use Kustomize to apply a staging overlay and a production overlay
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -679,7 +669,7 @@ helm install traefik traefik/traefik \
 ```yaml
 # ingress-nginx annotations
 nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-nginx.ingress.kubernetes.io/rate-limit: "100"
+nginx.ingress.kubernetes.io/limit-rps: "100"
 nginx.ingress.kubernetes.io/auth-url: "http://auth-service/verify"
 
 # Traefik annotations (when using standard Ingress resource)
@@ -689,7 +679,7 @@ traefik.ingress.kubernetes.io/router.tls: "true"
 
 ### Gateway API — The Future of Kubernetes Ingress
 
-The **Gateway API** is the next-generation Kubernetes networking standard (beta in Kubernetes 1.28+). It addresses Ingress limitations by being more expressive, role-oriented, and portable across providers.
+The **Gateway API** is the next-generation Kubernetes networking standard. Gateway API v1 is GA. It addresses Ingress limitations by being more expressive, role-oriented, and portable across providers.
 
 **Why Ingress has limitations:**
 - Only handles HTTP/HTTPS (no TCP/UDP natively)
@@ -713,7 +703,7 @@ kind: GatewayClass
 metadata:
   name: nginx
 spec:
-  controllerName: k8s.io/ingress-nginx
+  controllerName: gateway.nginx.org/nginx-gateway-controller
 ---
 # Gateway — platform team configures listeners
 apiVersion: gateway.networking.k8s.io/v1
@@ -771,8 +761,10 @@ spec:
       backendRefs:
         - name: frontend-service
           port: 80
----
-# Traffic splitting for canary deployments
+```
+
+```yaml
+# httproute-canary.yaml — separate file so one apply does not include both HTTPRoutes for app.example.com
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -803,12 +795,9 @@ spec:
 | Role separation | None | GatewayClass (admin) / Gateway (platform) / Route (app) |
 | Traffic splitting | Via annotations | Native weights on backendRefs |
 | Header matching | Via annotations | Native match rules |
-| Status | Stable | Beta (v1 in Kubernetes 1.28+) |
+| Status | Stable | v1 is GA |
 
 ```bash
-# Install Gateway API CRDs
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
-
 # Check Gateway status
 kubectl get gateway -A
 kubectl describe gateway prod-gateway -n gateway-infra
@@ -1091,33 +1080,14 @@ Helm packages Kubernetes manifests into reusable **charts**.
 # Install Helm
 curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-# Add a chart repository
-helm repo add bitnami https://charts.bitnami.com/bitnami
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-helm repo update
-
-# Search charts in the repos you added. `helm search hub` was removed in Helm 3.
-helm search repo nginx
-helm search repo wordpress
-# Broader catalog: https://artifacthub.io
-
-# Install a chart
-helm install my-nginx bitnami/nginx
-helm install my-nginx bitnami/nginx --set replicaCount=3
-helm install my-nginx bitnami/nginx -f values.yaml      # Custom values
-
-# List releases
+# The public Bitnami catalog stopped receiving updates in August 2025.
+# Lab 6.5 builds a chart locally. Do not install bitnami/wordpress.
+helm create web
+# Edit web/values.yaml, then:
+helm install web ./web
 helm list
-helm list -A                           # All namespaces
-
-# Upgrade a release
-helm upgrade my-nginx bitnami/nginx --set replicaCount=5
-
-# View chart values
-helm show values bitnami/nginx > default-values.yaml
-
-# Uninstall
-helm uninstall my-nginx
+helm upgrade web ./web --set replicaCount=3
+helm uninstall web
 
 # Create your own chart
 helm create mychart
@@ -1184,7 +1154,7 @@ kubectl auth can-i create deployments
 
 By default, every pod in Kubernetes can talk to every other pod — across namespaces. **NetworkPolicy** resources let you restrict traffic at the pod level, acting as a firewall inside the cluster.
 
-> **Note:** NetworkPolicy requires a CNI plugin that supports it (Calico, Cilium, WeaveNet). The default `kubenet` in minikube does not enforce policies unless you enable Calico: `minikube start --cni=calico`.
+> **Note:** NetworkPolicy requires a CNI that enforces it (Calico or Cilium). Start the cluster with `minikube start --cni=calico`.
 
 ### Default-deny all ingress
 
@@ -1341,6 +1311,7 @@ metadata:
 spec:
   securityContext:
     runAsNonRoot: true          # Must not run as root
+    runAsUser: 1000
     seccompProfile:
       type: RuntimeDefault      # Must have seccomp profile
   containers:
@@ -1543,16 +1514,10 @@ kubectl diff -k k8s/overlays/production
 
 ### Lab 6.1 — Local Cluster Setup
 
-**Prerequisites:** Module 05. minikube or kind installed. The machine has about 4 CPU and 8 GB RAM. No cloud account.
+**Prerequisites:** Module 05. minikube installed. The machine has about 4 CPU and 8 GB RAM. No cloud account.
 
 ```bash
-# minikube
 minikube start --cpus=4 --memory=8192
-kubectl cluster-info
-kubectl get nodes
-
-# kind (instead of minikube)
-kind create cluster --name devops-lab
 kubectl cluster-info
 kubectl get nodes
 ```
@@ -1563,8 +1528,6 @@ kubectl get nodes
 
 ```bash
 minikube stop
-# or, if you used kind:
-kind delete cluster --name devops-lab
 ```
 
 ### Lab 6.2 — Deploy an Application
@@ -1609,10 +1572,7 @@ EOF
 kubectl apply -f nginx.yaml
 kubectl rollout status deployment/nginx
 kubectl get pods -l app=nginx
-# minikube:
 minikube service nginx-service --url
-# kind: in another terminal, kubectl port-forward svc/nginx-service 8080:80
-# then: curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8080
 kubectl set image deployment/nginx nginx=nginx:1.26
 kubectl rollout status deployment/nginx
 kubectl get pods -l app=nginx -o jsonpath='{range .items[*]}{.spec.containers[0].image}{"\n"}{end}'
@@ -1683,14 +1643,7 @@ cd .. && rm -rf lab63
 **Prerequisites:** A running cluster. HPA needs metrics-server. The workload burns CPU. It is not a curl loop against nginx.
 
 ```bash
-# minikube
 minikube addons enable metrics-server
-
-# kind equivalent (skip this block if you used the minikube addon)
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-kubectl -n kube-system patch deployment metrics-server --type=json \
-  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
-
 kubectl -n kube-system rollout status deployment/metrics-server
 mkdir -p lab64 && cd lab64
 cat > cpu-burner.yaml <<'EOF'
@@ -1756,38 +1709,30 @@ cd .. && rm -rf lab64
 
 ### Lab 6.5 — Helm Chart
 
-**Prerequisites:** Helm 3 and a running cluster. `helm search hub` was removed in Helm 3.
+**Prerequisites:** Helm 3 and a running cluster.
 
 ```bash
-helm repo add bitnami https://charts.bitnami.com/bitnami
-helm repo update
-helm search repo wordpress
 mkdir -p lab65 && cd lab65
-cat > values.yaml <<'EOF'
-replicaCount: 2
-service:
-  type: ClusterIP
-EOF
-helm install my-nginx bitnami/nginx -f values.yaml
-helm status my-nginx
-kubectl get deploy -l app.kubernetes.io/instance=my-nginx
-helm upgrade my-nginx bitnami/nginx -f values.yaml --set replicaCount=3
-kubectl rollout status deployment/my-nginx
-kubectl get deploy my-nginx
+helm create web
+sed -i 's/^replicaCount: 1$/replicaCount: 2/' web/values.yaml
+helm install web ./web
+helm upgrade web ./web --set replicaCount=3
+kubectl rollout status deployment/web
+kubectl get deploy web
 ```
 
-**Expected result:** `helm search repo wordpress` lists the Bitnami WordPress chart. After upgrade, the nginx Deployment is ready with 3 replicas. The Service stays `ClusterIP` (no cloud load balancer).
+**Expected result:** After upgrade, deployment `web` is ready with 3 replicas.
 
 **Cleanup:**
 
 ```bash
-helm uninstall my-nginx
+helm uninstall web
 cd .. && rm -rf lab65
 ```
 
 ### Lab 6.6 — Network Policies
 
-**Prerequisites:** minikube. kind's default CNI does not enforce NetworkPolicy, so this lab uses minikube with Calico. `minikube delete` removes the cluster from earlier labs.
+**Prerequisites:** minikube with Calico. `minikube delete` removes the cluster from earlier labs.
 
 A Deployment's pod name is not `frontend`. Select the pod with `-l app=frontend`.
 

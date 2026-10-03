@@ -2,7 +2,7 @@
 
 > Part of the [DevOps Career Course](./README.md) by UncleJS
 
-[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 05 of 15](https://img.shields.io/badge/module-05%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate-orange) ![Docker 27.0+](https://img.shields.io/badge/Docker-27.0%2B-2496ED?logo=docker&logoColor=white) ![Podman 5.0+](https://img.shields.io/badge/Podman-5.0%2B-892CA0?logo=podman&logoColor=white) ![OCI · Registry](https://img.shields.io/badge/standard-OCI%20%C2%B7%20Registry-blue)
+[![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 05 of 15](https://img.shields.io/badge/module-05%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate-orange) ![Docker 27.0+](https://img.shields.io/badge/Docker-27.0%2B-2496ED?logo=docker&logoColor=white) ![Podman 4.9](https://img.shields.io/badge/Podman-4.9-892CA0?logo=podman&logoColor=white) ![OCI · Registry](https://img.shields.io/badge/standard-OCI%20%C2%B7%20Registry-blue)
 
 **Prerequisites:** Modules 01–04. Docker or Podman installed on Ubuntu 24.04.
 
@@ -42,20 +42,12 @@ This module covers both **Docker** and **Podman** with equal depth. Docker is th
 
 By the end of this module you will be able to:
 
-- Explain what containers are and how they differ from VMs
-- Pull, run, stop, and remove containers with both Docker and Podman
-- Write Dockerfiles and Containerfiles to build custom images
-- Configure container networking and persistent storage
-- Use Docker Compose and Podman Compose for multi-container applications
-- Push and pull images to/from container registries
-- Explain Podman's rootless security model and user namespace remapping
-- Run Podman in rootless mode and manage containers as unprivileged services
-- Integrate Podman containers with systemd using both `podman generate systemd` and Quadlet unit files
-- Write `.container`, `.network`, and `.pod` Quadlet unit files for production deployments
-- Use `skopeo` to copy and inspect images across registries without pulling
-- Use `buildah` for low-level OCI image construction
-- Apply container security best practices including capability dropping and image scanning
-- Optimize images for size and build speed
+- Pull, run, stop, and remove a container with Docker
+- Write a Dockerfile and build an image
+- Use Docker Compose for a multi-container application
+- Mount a volume and keep data after the container is removed
+- Run a rootless Podman container as a user systemd service with a Quadlet `.container` file
+- Scan an image with Trivy
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -541,8 +533,6 @@ Compose files define and run multi-container applications with a single command.
 ### docker-compose.yml / compose.yaml
 
 ```yaml
-version: "3.9"
-
 services:
   # Web application
   web:
@@ -630,8 +620,6 @@ Docker Compose can run multiple replicas of a service using `--scale`. Traffic d
 **Scalable `compose.yaml` (no fixed host port on the app):**
 
 ```yaml
-version: "3.8"
-
 services:
   web:
     image: nginx:alpine
@@ -704,8 +692,6 @@ Traefik is the cleanest way to load-balance Docker Compose services. It reads co
 **`compose.yaml` with Traefik auto-discovery:**
 
 ```yaml
-version: "3.8"
-
 networks:
   traefik-net:
 
@@ -751,8 +737,7 @@ for i in $(seq 1 10); do
     curl -s -H "Host: app.localhost" http://localhost/ | grep Hostname
 done
 
-# Open Traefik dashboard to see the service with 5 backends
-open http://localhost:8080/dashboard/
+# Traefik dashboard (service with 5 backends): http://localhost:8080/dashboard/
 ```
 
 **Load balancing behavior**: By default Traefik uses round-robin across all healthy replicas. When you scale down, Traefik immediately stops routing to removed containers. When a new replica starts, it joins the pool after passing Traefik's health checks.
@@ -1051,51 +1036,11 @@ podman run -d --pod logsidecar --name fluentbit \
 
 ---
 
-### systemd Integration — Two Approaches
+### systemd Integration — Quadlet
 
-Podman offers two ways to run containers as systemd services:
+`podman generate systemd` was removed in Podman 5 and is legacy on Podman 4.9. Quadlet is the systemd path for Podman containers.
 
-| Approach | Status | Best for |
-|---|---|---|
-| `podman generate systemd` | Removed in Podman 5 (deprecated in 4.4) | Podman 4 only |
-| **Quadlet** (`.container` unit files) | **Recommended** | Production, declarative, RHEL 9+ |
-
----
-
-#### Approach A: `podman generate systemd` (Legacy)
-
-This approach generates a `.service` file from a *running* container. Still useful for older systems or quick setups.
-
-```bash
-# 1. Run your container first
-podman run -d --name webserver --restart always nginx
-
-# 2. Generate the systemd unit file
-#    --new: creates a fresh container on start (rather than managing the existing one)
-#    --files: write to disk rather than stdout
-podman generate systemd --name webserver --files --new
-
-# 3. Install the generated unit
-mkdir -p ~/.config/systemd/user/
-cp container-webserver.service ~/.config/systemd/user/
-
-# 4. Enable and start
-systemctl --user daemon-reload
-systemctl --user enable --now container-webserver.service
-systemctl --user status container-webserver.service
-
-# 5. Enable linger so the service starts at boot without logging in
-loginctl enable-linger $USER
-
-# 6. View logs via the systemd journal
-journalctl --user -u container-webserver.service -f
-```
-
-> ⚠️ `podman generate systemd` was deprecated in Podman 4.4 and removed in Podman 5. Use Quadlet on Podman 5.
-
----
-
-#### Approach B: Quadlet (Modern — Recommended)
+#### Quadlet
 
 **Quadlet** is the production-grade, declarative way to run Podman containers as systemd services. You write a `.container` unit file and systemd's generator automatically creates the corresponding `.service` unit at `daemon-reload` time.
 
@@ -1776,7 +1721,6 @@ podman auto-update --dry-run
 | Volume create | `docker volume create` | `podman volume create` |
 | Compose up | `docker compose up -d` | `podman compose up -d` / `podman-compose up -d` |
 | Login to registry | `docker login` | `podman login` |
-| Generate systemd (legacy) | N/A | `podman generate systemd --name <c> --files --new` |
 | Quadlet unit dir (user) | N/A | `~/.config/containers/systemd/` |
 | Create pod | N/A | `podman pod create` |
 | Pod list | N/A | `podman pod ls` |
@@ -1799,31 +1743,27 @@ podman auto-update --dry-run
 
 ## Hands-On Labs
 
-### Lab 5.1 — Your First Container (Both Runtimes)
+### Lab 5.1 — Your First Container
 
-**Prerequisites:** Docker and Podman installed. Ports 8080 and 8081 free.
+**Prerequisites:** Docker installed. Port 8080 free. Podman is Lab 5.5.
 
 ```bash
 docker run -d -p 8080:80 --name nginx-docker nginx
-podman run -d -p 8081:80 --name nginx-podman docker.io/library/nginx
 curl -s -o /dev/null -w "docker:%{http_code}\n" http://localhost:8080
-curl -s -o /dev/null -w "podman:%{http_code}\n" http://localhost:8081
 docker ps
-podman ps
 ```
 
-**Expected result:** Both curls print `200`. `docker ps` shows `nginx-docker`. `podman ps` shows `nginx-podman`.
+**Expected result:** The curl prints `200`. `docker ps` shows `nginx-docker`.
 
 **Cleanup:**
 
 ```bash
 docker rm -f nginx-docker
-podman rm -f nginx-podman
 ```
 
 ### Lab 5.2 — Build a Custom Image
 
-**Prerequisites:** Docker and Podman. Port 8080 free. Work in an empty directory.
+**Prerequisites:** Docker. Port 8080 free. Work in an empty directory.
 
 ```bash
 mkdir -p lab52 && cd lab52
@@ -1835,20 +1775,15 @@ EOF
 docker build -t my-nginx:1.0 .
 docker run -d -p 8080:80 --name my-nginx-docker my-nginx:1.0
 curl -s http://localhost:8080
-docker rm -f my-nginx-docker
-podman build -t my-nginx:1.0 .
-podman run -d -p 8080:80 --name my-nginx-podman my-nginx:1.0
-curl -s http://localhost:8080
 ```
 
-**Expected result:** Both curls print `<h1>lab 5.2</h1>`.
+**Expected result:** The curl prints `<h1>lab 5.2</h1>`.
 
 **Cleanup:**
 
 ```bash
-podman rm -f my-nginx-podman
+docker rm -f my-nginx-docker
 docker rmi my-nginx:1.0
-podman rmi my-nginx:1.0
 cd .. && rm -rf lab52
 ```
 
@@ -1902,37 +1837,9 @@ docker run --rm -v appdata:/data ubuntu:24.04 cat /data/test.txt
 docker volume rm appdata
 ```
 
-### Lab 5.5 — Podman systemd Service (Both Approaches)
+### Lab 5.5 — Podman systemd Service (Quadlet)
 
 **Prerequisites:** Rootless Podman and a working `systemctl --user` session (`loginctl enable-linger $USER` if the user session stops at logout).
-
-**Path A — Legacy: `podman generate systemd`**
-
-Podman 5 removed this command. Run it only on Podman 4. On Podman 5, skip to Path B.
-
-```bash
-podman run -d --name nginx-legacy docker.io/library/nginx:alpine
-podman generate systemd --name nginx-legacy --files --new
-mkdir -p ~/.config/systemd/user/
-cp container-nginx-legacy.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now container-nginx-legacy.service
-systemctl --user status container-nginx-legacy.service --no-pager
-journalctl --user -u container-nginx-legacy.service -n 20 --no-pager
-```
-
-**Expected result:** `systemctl --user status` shows the unit active (running).
-
-**Cleanup:**
-
-```bash
-systemctl --user disable --now container-nginx-legacy.service
-rm -f ~/.config/systemd/user/container-nginx-legacy.service container-nginx-legacy.service
-systemctl --user daemon-reload
-podman rm -f nginx-legacy
-```
-
-**Path B — Modern: Quadlet**
 
 ```bash
 mkdir -p ~/.config/containers/systemd/
@@ -2006,6 +1913,6 @@ sudo rm -f /usr/local/bin/trivy
 - [Rootless Containers](https://rootlesscontaine.rs/)
 - [pasta — Fast Rootless Networking](https://passt.top/)
 - [Glossary: Container](./glossary.md#c), [Image](./glossary.md#i), [Podman](./glossary.md#p), [Volume](./glossary.md#v)
-- **Certification**: CKAD (Certified Kubernetes Application Developer) — containers are a prerequisite
+- **Certification**: CKAD (Certified Kubernetes Application Developer) — concept foundation only, not exam-ready
 
 [↑ Back to TOC](#table-of-contents)

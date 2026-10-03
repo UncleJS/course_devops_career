@@ -61,17 +61,10 @@ flowchart LR
 
 By the end of this module, you will be able to:
 
-- Explain the lifecycle of a log event from emission to query
-- Implement structured logging in applications (JSON format)
-- Deploy and configure the full ELK Stack
-- Write Elasticsearch queries and build Kibana dashboards
-- Deploy Loki and write LogQL queries. Grafana Alloy is the current shipper; Promtail is shown once at the same 3.3.x version
-- Ship logs with Filebeat, Fluent Bit, and Grafana Alloy
-- Implement Kubernetes-native logging patterns
-- Design log retention, rotation, and archival policies
-- Choose the right logging stack for a given use case
-- Configure log-based alerting in Loki with Grafana Alerting
-- Detect anomalies in log streams using threshold rules and ML-based techniques
+- Deploy Loki and Promtail with Docker Compose and query a line in Grafana
+- Write a JSON log line and see the parsed fields in Loki
+- Start the ELK stack from this chapter and find a test document in Kibana
+- Fire a Loki alerting rule from lab traffic
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -870,6 +863,7 @@ services:
 
   promtail:
     image: grafana/promtail:3.3.2
+    user: root
     volumes:
       - /var/log:/var/log:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
@@ -1720,14 +1714,21 @@ logcli series '{job="app"}' --since=1h
 
 **Goal**: Run the Loki 3.3.2 compose file from this module and query the syslog job it scrapes.
 
-Copy `docker-compose.yml`, `loki-config.yml`, `promtail-config.yml`, and `grafana-datasources.yml` from the Loki section. The Promtail block already tails both system log paths:
+Paste every one of these files from the Loki section into the lab directory:
+
+- `docker-compose.yml` (Loki Deployment)
+- `loki-config.yml`
+- `promtail-config.yml`
+- `grafana-datasources.yml`
+
+The Promtail service in that compose file runs as `user: root` so it can read the system log. It already tails both paths:
 
 - Ubuntu: `/var/log/syslog`
 - Rocky: `/var/log/messages`
 
 ```bash
 mkdir loki-lab && cd loki-lab
-# paste the three files from this module, then:
+# Paste docker-compose.yml, loki-config.yml, promtail-config.yml, and grafana-datasources.yml, then:
 docker compose up -d
 logger "loki lab marker"
 ```
@@ -1749,12 +1750,52 @@ Open Grafana at `http://localhost:3000` (admin / admin123). The datasource file 
 
 **Goal**: Write a Python app that emits structured JSON logs and ship them to Loki.
 
+Save the chapter `JSONFormatter` class and `get_logger` function as `json_logger.py`. That logger writes JSON to stdout. Create `/var/log/app` and append the process output to `/var/log/app/app.log`, which the chapter Promtail config tails (`__path__: /var/log/app/*.log`).
+
+```python
+# json_logger.py — JSONFormatter and get_logger from Structured logging in Python
+import logging
+import json
+import sys
+from datetime import datetime, timezone
+
+
+class JSONFormatter(logging.Formatter):
+    """Emit log records as JSON lines."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname.lower(),
+            "logger": record.name,
+            "message": record.getMessage(),
+            "module": record.module,
+            "function": record.funcName,
+            "line": record.lineno,
+        }
+        for key, value in record.__dict__.items():
+            if key not in logging.LogRecord.__dict__ and not key.startswith("_"):
+                if key not in log_entry:
+                    log_entry[key] = value
+        if record.exc_info:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_entry)
+
+
+def get_logger(name: str) -> logging.Logger:
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JSONFormatter())
+    logger.addHandler(handler)
+    return logger
+```
+
 ```python
 # app.py — generate sample JSON log traffic
 import time
 import random
-import logging
-from json_logger import get_logger   # Use the JSONFormatter from this module
+from json_logger import get_logger
 
 log = get_logger("lab-app")
 
@@ -1772,7 +1813,13 @@ while True:
     time.sleep(0.5)
 ```
 
-Point the Promtail `job: app` path from this module at the file this script writes (`/var/log/app/*.log`). Do not add a second Promtail config. The panel query is:
+```bash
+sudo mkdir -p /var/log/app
+sudo chown "$USER" /var/log/app
+python3 app.py >> /var/log/app/app.log
+```
+
+Do not add a second Promtail config. The panel query is:
 
 ```logql
 sum by(service) (rate({job="app", level="error"}[5m]))
@@ -1788,8 +1835,16 @@ sum by(service) (rate({job="app", level="error"}[5m]))
 
 **Goal**: Start the Elasticsearch, Logstash, Kibana, and Filebeat services from the compose file in this module, and search a document you index yourself. That compose file does not run Nginx.
 
+Save the chapter pipeline as `logstash/pipeline/logstash.conf` and the chapter Filebeat config as `filebeat/filebeat.yml`. Those paths match the compose bind mounts `./logstash/pipeline` and `./filebeat/filebeat.yml`. Also save this `logstash/config/logstash.yml` (the compose file mounts it at `/usr/share/logstash/config/logstash.yml`):
+
+```yaml
+# logstash/config/logstash.yml
+http.host: 0.0.0.0
+```
+
 ```bash
 sudo sysctl -w vm.max_map_count=262144
+mkdir -p logstash/pipeline logstash/config filebeat
 docker compose up -d
 
 # Host-side curl. The Elasticsearch image healthcheck does not use curl.
@@ -1802,7 +1857,7 @@ curl -s -X POST http://localhost:9200/app-logs-lab/_doc \
 curl -s 'http://localhost:9200/app-logs-lab/_search?q=service:lab&pretty'
 ```
 
-Open Kibana at `http://localhost:5601` and search `service: lab`.
+Open Kibana at `http://localhost:5601`. Create the data view that search uses: Stack Management → Data Views → Create data view, name `app-logs-lab`, index pattern `app-logs-lab`, and leave the time field unset. In Discover, select that data view and search `service: lab`.
 
 **Expected:** cluster health is `yellow` or `green` on a single node, and the search returns the `lab event` document.
 
@@ -1814,14 +1869,16 @@ Open Kibana at `http://localhost:5601` and search `service: lab`.
 
 **Goal**: Define a Loki alerting rule that fires when error rate exceeds threshold.
 
+`loki-config.yml` sets `auth_enabled: false`, so the tenant directory is `fake`. Mount the rule file at `/loki/rules/fake/alerts.yml`. The threshold is `> 0.1` so the Lab 2 traffic can fire it.
+
 ```yaml
-# /loki/rules/alerts.yml
+# alerts.yml — mounted at /loki/rules/fake/alerts.yml
 groups:
   - name: app_alerts
     rules:
       - alert: HighErrorRate
         expr: |
-          sum(rate({job="app", level="error"}[5m])) > 0.5
+          sum(rate({job="app", level="error"}[5m])) > 0.1
         for: 2m
         labels:
           severity: warning
@@ -1830,9 +1887,15 @@ groups:
           description: "Error rate is {{ $value | humanize }} per second"
 ```
 
-1. Add the rule to `loki-config.yml` ruler section
-2. Restart Loki
-3. Generate errors in your test app
+Add this volume to the `loki` service, next to the existing config mount:
+
+```yaml
+- ./alerts.yml:/loki/rules/fake/alerts.yml:ro
+```
+
+1. Save the rule as `alerts.yml` and add the volume above
+2. Restart Loki (`docker compose up -d`)
+3. Generate errors with the Lab 2 script
 4. Observe the alert in Grafana → Alerting
 
 **Expected:** `HighErrorRate` is pending or firing while the Lab 2 script emits errors.

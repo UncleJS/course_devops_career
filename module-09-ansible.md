@@ -4,7 +4,7 @@
 
 [![CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/) ![Module 09 of 15](https://img.shields.io/badge/module-09%20of%2015-grey) ![Level](https://img.shields.io/badge/level-Intermediate-orange) ![Ansible 2.17+](https://img.shields.io/badge/Ansible-2.17%2B-EE0000?logo=ansible&logoColor=white) ![AWX stable](https://img.shields.io/badge/AWX-stable-EE0000?logo=ansible&logoColor=white) ![YAML · Agentless](https://img.shields.io/badge/features-YAML%20%C2%B7%20Agentless-lightgrey)
 
-**Prerequisites:** Modules 01–04. You can use SSH, edit YAML, and run commands in a terminal. Ansible is installed on the control node (`sudo apt install ansible` on Ubuntu).
+**Prerequisites:** Modules 01–04. You can use SSH, edit YAML, and run commands in a terminal. Ansible is installed on the control node (`sudo apt install -y pipx && pipx install 'ansible-core>=2.17,<2.19'`, then `pipx ensurepath`).
 
 **Time:** About 8 hours, including the labs.
 
@@ -77,8 +77,6 @@ By the end of this module you will be able to:
 - Use handlers for conditional service restarts
 - Encrypt sensitive data with Ansible Vault
 - Write idempotent playbooks that are safe to re-run
-- Use dynamic inventory for cloud environments
-- Install and navigate AWX/Ansible Automation Platform for team-scale automation
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -133,9 +131,10 @@ Good installation and setup are less about getting the CLI on your laptop and mo
 This is also where beginners often learn their first Ansible lesson: connection problems are usually more common than playbook problems. Before building elaborate roles, make sure the control node can authenticate cleanly, reach the target hosts, and escalate privileges safely. If those basics are shaky, every later section feels harder than it should.
 
 ```bash
-# Ubuntu/Debian
+# Ubuntu/Debian — Ansible 2.17 or 2.18
 sudo apt update
-sudo apt install -y ansible
+sudo apt install -y pipx && pipx install 'ansible-core>=2.17,<2.19'
+pipx ensurepath
 
 # RHEL/Rocky/Fedora
 sudo dnf install -y ansible
@@ -191,7 +190,7 @@ bastion.example.com
 
 # Web server group
 [web]
-web01.example.com
+web01.example.com ansible_host=10.0.1.10 http_port=8080
 web02.example.com
 web03.example.com ansible_port=2222
 
@@ -205,13 +204,10 @@ db02.example.com
 web
 db
 
-# Variables for a group
+# Variables for a group — assignments only, no host lines
 [web:vars]
 nginx_port=80
 app_env=production
-
-# Variables for a specific host
-web01.example.com ansible_host=10.0.1.10 http_port=8080
 ```
 
 ### Static Inventory (YAML format)
@@ -846,15 +842,20 @@ Error handling builds on that trust. Good playbooks assume that some steps may f
 - name: Get disk usage
   command: df -h /
   register: disk_info
+  changed_when: false
 
 - name: Show disk info
   debug:
     var: disk_info.stdout_lines
 
+- name: Parse the Use% integer on the / line
+  set_fact:
+    root_use_pct: "{{ ((disk_info.stdout_lines | select('search', '\\s/$') | first).split()[-2] | regex_replace('%', '')) | int }}"
+
 - name: Fail if disk is over 90%
   fail:
     msg: "Disk usage is critical!"
-  when: "'9' in disk_info.stdout"
+  when: root_use_pct | int > 90
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1091,7 +1092,9 @@ An inventory host named `localhost` uses SSH unless `ansible_connection=local` i
 
 ```bash
 sudo apt update
-sudo apt install -y ansible
+sudo apt install -y pipx && pipx install 'ansible-core>=2.17,<2.19'
+pipx ensurepath
+export PATH="$HOME/.local/bin:$PATH"
 mkdir -p ~/labs/module-09-ping
 cd ~/labs/module-09-ping
 printf 'localhost ansible_connection=local\n' > inventory
@@ -1105,7 +1108,7 @@ ansible -i inventory all -m setup -a 'filter=ansible_distribution*'
 
 ### Lab 9.2 — Install a Web Stack
 
-This lab uses `apt` on Ubuntu.
+This lab uses `apt` on Ubuntu. The playbook sets `become: true`, so each run passes `--ask-become-pass`. Passwordless sudo is required if you omit that flag.
 
 ```bash
 mkdir -p ~/labs/module-09-web/files
@@ -1133,14 +1136,13 @@ cat > install-nginx.yml <<'EOF'
         src: files/index.html
         dest: /var/www/html/index.html
 EOF
-ansible-playbook -i inventory install-nginx.yml --check
-ansible-playbook -i inventory install-nginx.yml --check --diff
-ansible-playbook -i inventory install-nginx.yml
+ansible-playbook -i inventory install-nginx.yml --ask-become-pass
 curl -fsS http://127.0.0.1/
-ansible-playbook -i inventory install-nginx.yml
+ansible-playbook -i inventory install-nginx.yml --ask-become-pass
+ansible-playbook -i inventory install-nginx.yml --check --ask-become-pass
 ```
 
-**Expected:** `--check` predicts changes and does not leave nginx running. After the real run, `curl` prints `Hello from Ansible`. The second real run reports `ok` for the install, service, and file tasks.
+**Expected:** The first run installs nginx, so `curl` prints `Hello from Ansible`. The second run reports `ok` for the install, service, and file tasks. `--check` then reports that a further run would not change those tasks.
 
 **Cleanup:** `sudo apt remove -y nginx && rm -rf ~/labs/module-09-web`
 

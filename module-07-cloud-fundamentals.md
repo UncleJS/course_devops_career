@@ -70,19 +70,12 @@ flowchart TD
 
 By the end of this module you will be able to:
 
-- Explain the core cloud service and deployment models
-- Navigate the three major cloud providers and their equivalent services
-- Launch and manage virtual machines on any cloud provider
-- Create and manage object storage buckets
-- Configure cloud networking (VPC, subnets, security groups)
-- Manage identities and permissions with IAM
-- Use cloud-managed databases
-- Use the CLI tools for AWS, Azure, and GCP
-- Estimate and optimize cloud costs
-- Deploy serverless functions with AWS Lambda, Azure Functions, and GCP Cloud Functions
-- Configure Auto Scaling Groups and managed instance groups for elastic compute
-- Design advanced VPC topologies with NAT gateways, VPC peering, and private endpoints
-- Set up and use cloud container registries (ECR, ACR, Artifact Registry)
+- Launch an EC2 instance and wait until the status checks pass
+- Create an S3 bucket and copy an object into it
+- Attach an IAM role that an EC2 instance can use
+- Create an RDS PostgreSQL instance and connect with `psql`
+- Deploy an AWS Lambda function URL
+- Push an image to ECR
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -157,7 +150,7 @@ flowchart TD
 
 ## Beginner: The Big Three — AWS, Azure, GCP
 
-### Market Position (2025)
+### Market Position (2026)
 
 | Provider | Market Share | Strengths |
 |---|---|---|
@@ -301,17 +294,21 @@ aws s3 rb s3://my-bucket --force
 
 # Azure Blob Storage
 az storage account create --name mystorageaccount --resource-group myRG --location eastus --sku Standard_LRS
-az storage container create --name mycontainer --account-name mystorageaccount
-az storage blob upload --file ./file.txt --container-name mycontainer --name file.txt --account-name mystorageaccount
-az storage blob list --container-name mycontainer --account-name mystorageaccount --output table
+az role assignment create \
+  --role "Storage Blob Data Contributor" \
+  --assignee "$(az account show --query user.name --output tsv)" \
+  --scope "$(az storage account show --name mystorageaccount --resource-group myRG --query id --output tsv)"
+az storage container create --name mycontainer --account-name mystorageaccount --auth-mode login
+az storage blob upload --file ./file.txt --container-name mycontainer --name file.txt --account-name mystorageaccount --auth-mode login
+az storage blob list --container-name mycontainer --account-name mystorageaccount --auth-mode login --output table
 
 # GCP Cloud Storage
-gsutil mb gs://my-unique-bucket-name
-gsutil ls
-gsutil cp file.txt gs://my-bucket/
-gsutil cp gs://my-bucket/file.txt ./
-gsutil rsync -r ./local gs://my-bucket/
-gsutil rm gs://my-bucket/file.txt
+gcloud storage buckets create gs://my-unique-bucket-name
+gcloud storage ls
+gcloud storage cp file.txt gs://my-bucket/
+gcloud storage cp gs://my-bucket/file.txt ./
+gcloud storage rsync -r ./local gs://my-bucket/
+gcloud storage rm gs://my-bucket/file.txt
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -808,13 +805,17 @@ aws autoscaling create-auto-scaling-group \
   --max-size 10 \
   --desired-capacity 2 \
   --vpc-zone-identifier "subnet-abc123,subnet-def456" \
-  --health-check-type ELB \
-  --health-check-grace-period 300
+  --health-check-type EC2
 
 # Attach to a load balancer target group
 aws autoscaling attach-load-balancer-target-groups \
   --auto-scaling-group-name web-asg \
   --target-group-arns arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/my-tg/abc123
+
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name web-asg \
+  --health-check-type ELB \
+  --health-check-grace-period 300
 
 # Create a scaling policy (target tracking — CPU at 60%)
 aws autoscaling put-scaling-policy \
@@ -1029,7 +1030,7 @@ docker push us-central1-docker.pkg.dev/my-project/myrepo/myapp:latest
 | Azure CLI | `az vm list` | Manage Azure resources |
 | gcloud | `gcloud compute instances list` | Manage GCP resources |
 | `aws s3` | `aws s3 cp file.txt s3://bucket/` | S3 file operations |
-| `gsutil` | `gsutil cp file.txt gs://bucket/` | GCS file operations |
+| `gcloud storage` | `gcloud storage cp file.txt gs://bucket/` | GCS file operations |
 | `aws configure` | — | Set up AWS credentials |
 | `az login` | — | Authenticate to Azure |
 | `gcloud init` | — | Initialize GCP CLI |
@@ -1085,6 +1086,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
 aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
 PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
   --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+aws ec2 wait instance-status-ok --instance-ids "$INSTANCE_ID"
 ssh -i lab07-key.pem -o StrictHostKeyChecking=accept-new "ubuntu@${PUBLIC_IP}" \
   'sudo apt update && sudo apt install -y nginx'
 curl -fsS "http://${PUBLIC_IP}"
@@ -1195,20 +1197,21 @@ aws configure set aws_secret_access_key "" --profile lab07-reader
 
 ### Lab 7.4 — Cloud Database
 
-Pass PostgreSQL major version `16`. Confirm offered versions first so you do not pin a withdrawn minor.
+Pass PostgreSQL 16.x. Install the client, set `ENGINE_VERSION` from the offered 16.x versions, and wait until the instance is deleted.
 
 ```bash
-aws rds describe-db-engine-versions \
+sudo apt install -y postgresql-client
+ENGINE_VERSION=$(aws rds describe-db-engine-versions \
   --engine postgres \
-  --query 'DBEngineVersions[?starts_with(EngineVersion, `16.`)].EngineVersion' \
-  --output text
+  --query 'sort(DBEngineVersions[?starts_with(EngineVersion, `16.`)].EngineVersion)[-1]' \
+  --output text)
 
 export DB_PASSWORD='Lab07-ChangeMe-1'
 aws rds create-db-instance \
   --db-instance-identifier lab07-pg \
   --db-instance-class db.t3.micro \
   --engine postgres \
-  --engine-version 16 \
+  --engine-version "$ENGINE_VERSION" \
   --master-username labadmin \
   --master-user-password "${DB_PASSWORD}" \
   --allocated-storage 20 \
@@ -1229,9 +1232,10 @@ PGPASSWORD="$DB_PASSWORD" psql "host=${ENDPOINT} user=labadmin dbname=postgres s
 PGPASSWORD="$DB_PASSWORD" psql "host=${ENDPOINT} user=labadmin dbname=lab07 sslmode=require" \
   -c 'CREATE TABLE notes (id int);'
 aws rds delete-db-instance --db-instance-identifier lab07-pg --skip-final-snapshot
+aws rds wait db-instance-deleted --db-instance-identifier lab07-pg
 ```
 
-**Expected:** the version query prints one or more `16.` versions. Backup retention prints `1`. `psql` creates the database and table. `delete-db-instance` returns a deleting status. Wait until the instance is gone before you close the account, or you keep paying.
+**Expected:** `ENGINE_VERSION` is a `16.` version from `describe-db-engine-versions`. Backup retention prints `1`. `psql` creates the database and table. `aws rds wait db-instance-deleted` returns after the instance is gone.
 
 ### Lab 7.5 — Serverless Function
 

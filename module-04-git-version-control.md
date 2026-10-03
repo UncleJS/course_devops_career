@@ -50,12 +50,8 @@ By the end of this module you will be able to:
 - Merge branches and resolve conflicts confidently
 - Push and pull code from remote repositories (GitHub, GitLab)
 - Use pull requests / merge requests for code review
-- Apply Git workflows used by professional engineering teams
-- Use `rebase`, `cherry-pick`, `stash`, and `bisect` for advanced tasks
-- Write Git hooks to automate pre-commit and pre-push checks
-- Apply Git best practices to infrastructure-as-code repositories
-- Sign commits with GPG for integrity and audit trails
-- Explain pull-based GitOps in one paragraph. The controllers are module 15.
+- Write a pre-commit hook and a commit-msg hook
+- Recover a commit with `git reflog`
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -726,23 +722,17 @@ repos:
 ```
 
 ```bash
-pip install pre-commit
+sudo apt install pre-commit
 pre-commit install   # Install hooks from .pre-commit-config.yaml
 pre-commit run --all-files  # Run manually against all files
 ```
 
-**2. Husky** (Node.js projects):
+**2. Husky** (Node.js projects). Current Husky ignores a `husky` key in `package.json`.
 
-```json
-// package.json
-{
-  "husky": {
-    "hooks": {
-      "pre-commit": "lint-staged",
-      "commit-msg": "commitlint --edit $1"
-    }
-  }
-}
+```bash
+npx husky init
+# .husky/pre-commit
+npx lint-staged
 ```
 
 **3. Symlink hooks to a tracked directory:**
@@ -767,7 +757,7 @@ ln -sf ../../hooks/pre-commit .git/hooks/pre-commit
 *.tfstate
 *.tfstate.backup
 *.tfplan
-.terraform.lock.hcl
+# Commit .terraform.lock.hcl so every apply uses the same provider versions.
 override.tf
 override.tf.json
 *_override.tf
@@ -980,11 +970,19 @@ The install, Application manifests, and Flux comparison are in module 15, after 
 
 ### Lab 4.1 — First Repository
 
-1. Create a new directory and initialize a Git repository
-2. Create a `README.md` file and commit it with a Conventional Commits message
-3. View the commit with `git log` and `git show`
-4. Make a change, view it with `git diff`, stage and commit
-5. Run `git log --oneline --graph --all` to see the history visually
+```bash
+mkdir -p ~/labs/module-04-init && cd ~/labs/module-04-init
+git init -b main
+git config user.email "lab@example.com"
+git config user.name "Lab User"
+echo '# lab' > README.md
+git add README.md && git commit -m "docs: initial readme"
+echo 'more' >> README.md
+git diff
+git add README.md && git commit -m "docs: second line"
+git log --oneline --graph --all
+git status
+```
 
 **Expected:** `git log --oneline` shows two commits. `git status` prints `nothing to commit, working tree clean`.
 
@@ -992,13 +990,21 @@ The install, Application manifests, and Flux comparison are in module 15, after 
 
 ### Lab 4.2 — Branching & Merging
 
-1. Create a branch: `git switch -c feature/add-config`
-2. Create a file `config.yaml` and commit it
-3. Switch back to `main`
-4. Make a different change on `main` and commit it
-5. Merge the feature branch: `git merge --no-ff feature/add-config`
-6. View the merge history: `git log --oneline --graph`
-7. Delete the branch: `git branch -d feature/add-config`
+```bash
+mkdir -p ~/labs/module-04-merge && cd ~/labs/module-04-merge
+git init -b main
+git config user.email "lab@example.com"
+git config user.name "Lab User"
+echo base > README.md && git add README.md && git commit -m "docs: base"
+git switch -c feature/add-config
+echo 'port: 8080' > config.yaml && git add config.yaml && git commit -m "feat: add config"
+git switch main
+echo 'lab' >> README.md && git add README.md && git commit -m "docs: note"
+git merge --no-ff feature/add-config -m "merge: add config"
+git log --oneline --graph
+git branch -d feature/add-config
+git branch
+```
 
 **Expected:** `git log --oneline --graph` shows a merge commit with two parents. `git branch` no longer lists `feature/add-config`.
 
@@ -1006,12 +1012,26 @@ The install, Application manifests, and Flux comparison are in module 15, after 
 
 ### Lab 4.3 — Conflict Resolution
 
-1. Create two branches from the same base commit
-2. Edit the same line of the same file in both branches
-3. Attempt to merge — observe the conflict markers
-4. Resolve the conflict. Markers are seven characters: `<<<<<<<`, `=======`, `>>>>>>>`.
-5. Complete the merge with a descriptive commit message
-6. `git config rerere.enabled true`. To see it remember a resolution, reset the merge (`git merge --abort` if you have not committed, or reset to the pre-merge commit), then merge the same branches again. Git reuses the recorded resolution.
+```bash
+mkdir -p ~/labs/module-04-conflict && cd ~/labs/module-04-conflict
+git init -b main
+git config user.email "lab@example.com"
+git config user.name "Lab User"
+git config rerere.enabled true
+echo 'color: blue' > app.txt && git add app.txt && git commit -m "feat: base"
+git switch -c left
+echo 'color: red' > app.txt && git commit -am "feat: red"
+git switch main
+echo 'color: green' > app.txt && git commit -am "feat: green"
+git merge left || true
+# Markers are seven characters: <<<<<<< ======= >>>>>>>
+printf 'color: green\n' > app.txt
+git add app.txt && git commit -m "merge: keep green"
+git reset --hard HEAD^
+git merge left || true
+git add app.txt && git commit -m "merge: rerere"
+git status
+```
 
 **Expected:** `git status` is clean after the merge commit. `git log --oneline --graph` shows both parents.
 
@@ -1034,12 +1054,33 @@ The install, Application manifests, and Flux comparison are in module 15, after 
 
 ### Lab 4.5 — Git Hook
 
-1. Write a `pre-commit` hook that:
-   - Prevents committing `.env` files
-   - Prevents direct commits to `main`
-2. Write a `commit-msg` hook that enforces Conventional Commits format
-3. Test both hooks with valid and invalid cases
-4. A hook that runs `bash -n` on a file in the repo is enough. Do not call `bun`.
+```bash
+mkdir -p ~/labs/module-04-hooks && cd ~/labs/module-04-hooks
+git init -b main
+git config user.email "lab@example.com"
+git config user.name "Lab User"
+echo 'ok' > README.md && git add README.md && git commit -m "docs: base"
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/bash
+if git diff --cached --name-only | grep -qx '.env'; then
+  echo "refusing .env" >&2
+  exit 1
+fi
+EOF
+cat > .git/hooks/commit-msg << 'EOF'
+#!/bin/bash
+grep -qE '^(feat|fix|docs|style|refactor|perf|test|chore|ci|revert)(\(.+\))?: .{1,100}' "$1" || {
+  echo "use Conventional Commits" >&2
+  exit 1
+}
+EOF
+chmod +x .git/hooks/pre-commit .git/hooks/commit-msg
+echo secret > .env && git add .env && git commit -m "docs: leak" || true
+git reset
+echo note >> README.md && git add README.md
+git commit -m "wip" || true
+git commit -m "docs: lab note"
+```
 
 **Expected:** Committing a file named `.env` is rejected. A message `wip` is rejected. A message `docs: lab note` is accepted.
 
@@ -1052,6 +1093,8 @@ Argo CD is module 15. This lab stays in Git.
 ```bash
 mkdir -p ~/labs/module-04-reflog && cd ~/labs/module-04-reflog
 git init -b main
+git config user.email "lab@example.com"
+git config user.name "Lab User"
 echo one > file.txt && git add file.txt && git commit -m "first"
 echo two >> file.txt && git commit -am "second"
 git reset --hard HEAD~1

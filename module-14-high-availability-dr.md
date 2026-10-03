@@ -18,6 +18,7 @@
 - [Overview](#overview)
 - [Learning Objectives](#learning-objectives)
 - [Core Concepts: RTO, RPO, SLA](#core-concepts-rto-rpo-sla)
+- [Availability Tiers & Nines](#availability-tiers--nines)
 - [Failure Mode Analysis](#failure-mode-analysis)
 - [High Availability Architecture Patterns](#high-availability-architecture-patterns)
 - [Load Balancing](#load-balancing)
@@ -26,7 +27,9 @@
 - [Multi-Region Architecture](#multi-region-architecture)
 - [Kubernetes HA](#kubernetes-ha)
 - [Disaster Recovery Planning](#disaster-recovery-planning)
+- [DR Testing & Chaos Engineering](#dr-testing--chaos-engineering)
 - [Cloud HA Services](#cloud-ha-services)
+- [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
 
@@ -62,17 +65,10 @@ flowchart TD
 
 By the end of this module, you will be able to:
 
-- Define and calculate RTO, RPO, MTTR, and MTBF
-- Translate business SLA requirements into infrastructure designs
-- Identify and eliminate single points of failure (SPOFs)
-- Design active-active and active-passive HA configurations
-- Configure HAProxy and Nginx for load balancing
-- Set up MySQL/MariaDB primary-replica and Galera cluster replication
-- Design and implement backup strategies with automated verification
-- Architect multi-region deployments for AWS, Azure, and GCP
-- Configure Kubernetes for production-grade HA
-- Write and execute DR runbooks
-- Run chaos engineering experiments with Chaos Monkey and Chaos Mesh
+- Configure HAProxy in front of three backends and reload it after `haproxy -c`
+- Start MySQL 8.4 primary-replica replication and read replica status
+- Apply a PodDisruptionBudget
+- Restore a single-node etcd snapshot with `--force-new-cluster`
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -112,12 +108,12 @@ Last backup          Failure           Recovery complete
 flowchart LR
     LB["Last backup<br/>(or last sync point)"]
     F["Failure event"]
-    RD["Recovery declared"]
+    RD["Detection<br/>(MTTD, inside the RTO window)"]
     RC["Recovery complete<br/>(service verified)"]
 
     LB -->|"RPO window<br/>(max data loss)"| F
-    F -->|"MTTD<br/>(detect)"| RD
-    RD -->|"RTO window<br/>(max downtime)"| RC
+    F -->|"RTO window<br/>(includes detection)"| RD
+    RD -->|"RTO window<br/>(through recovery complete)"| RC
 ```
 
 ### Translating business requirements
@@ -462,61 +458,70 @@ Semi-synchronous replication (MySQL 5.7+, MariaDB) is a middle ground: the prima
 
 ### MySQL / MariaDB Primary-Replica Replication
 
-```bash
+```ini
 # --- PRIMARY SERVER ---
-
 # /etc/mysql/conf.d/replication.cnf
 [mysqld]
 server-id = 1
 log_bin = /var/log/mysql/mysql-bin.log
 binlog_expire_logs_seconds = 604800
 max_binlog_size = 100M
-binlog_format = ROW    # ROW is safer than STATEMENT
-innodb_flush_log_at_trx_commit = 1   # Sync on every commit (ACID)
+binlog_format = ROW
+innodb_flush_log_at_trx_commit = 1
 sync_binlog = 1
-
-# Create replication user on primary
-CREATE USER 'replicator'@'192.168.1.%' IDENTIFIED BY 'ReplPassword123!';
-GRANT REPLICATION SLAVE ON *.* TO 'replicator'@'192.168.1.%';
-# Note: the privilege is still named REPLICATION SLAVE in every MySQL version —
-# only the statements were renamed (CHANGE REPLICATION SOURCE TO, START REPLICA).
-# MariaDB 10.5+ also accepts REPLICATION REPLICA as an alias for the privilege.
-FLUSH PRIVILEGES;
-
-# Get current binary log position (lock tables briefly)
-FLUSH TABLES WITH READ LOCK;
-SHOW BINARY LOG STATUS;   -- MySQL 8.4+ / SHOW MASTER STATUS on older versions
-# Note: File and Position
-UNLOCK TABLES;
 ```
 
-```bash
-# --- REPLICA SERVER ---
+```sql
+-- Create replication user on primary.
+-- The privilege is still named REPLICATION SLAVE in every MySQL version.
+-- Only the statements were renamed (CHANGE REPLICATION SOURCE TO, START REPLICA).
+-- MariaDB 10.5+ also accepts REPLICATION REPLICA as an alias for the privilege.
+CREATE USER 'replicator'@'192.168.1.%' IDENTIFIED BY 'ReplPassword123!';
+GRANT REPLICATION SLAVE ON *.* TO 'replicator'@'192.168.1.%';
+FLUSH PRIVILEGES;
 
+-- Hold this read lock in this session. Do not UNLOCK TABLES and do not
+-- disconnect until the replica has been pointed at the File and Position below.
+FLUSH TABLES WITH READ LOCK;
+SHOW BINARY LOG STATUS;   -- MySQL 8.4+; SHOW MASTER STATUS on older versions
+-- Note File and Position. Leave the lock held.
+```
+
+```ini
+# --- REPLICA SERVER ---
 # /etc/mysql/conf.d/replication.cnf
 [mysqld]
 server-id = 2
 relay_log = /var/log/mysql/mysql-relay-bin.log
 read_only = 1
-log_replica_updates = 1    # Allow replica to also be replicated to (chain)
-# Note: log_slave_updates is a deprecated alias removed in MySQL 9.0
+log_replica_updates = 1
+# log_slave_updates is a deprecated alias removed in MySQL 9.0
+```
 
-# Configure replication (MySQL 8.0.23+ syntax — CHANGE REPLICATION SOURCE TO)
+```sql
+-- Run this while the primary session still holds the read lock.
+-- MySQL 8.0.23+ syntax: CHANGE REPLICATION SOURCE TO.
 CHANGE REPLICATION SOURCE TO
     SOURCE_HOST='192.168.1.30',
     SOURCE_USER='replicator',
     SOURCE_PASSWORD='ReplPassword123!',
-    SOURCE_LOG_FILE='mysql-bin.000001',  # From SHOW BINARY LOG STATUS
-    SOURCE_LOG_POS=154;
-
+    SOURCE_LOG_FILE='mysql-bin.000001',  -- File from SHOW BINARY LOG STATUS
+    SOURCE_LOG_POS=154;                   -- Position from SHOW BINARY LOG STATUS
 START REPLICA;
+```
 
-# Check status (modern command; older versions used SHOW SLAVE STATUS\G)
+```sql
+-- Primary session: release the lock only after START REPLICA has used that file and position.
+UNLOCK TABLES;
+```
+
+```sql
+-- Replica: check status (older versions used SHOW SLAVE STATUS\G)
 SHOW REPLICA STATUS\G
-# Look for:
-# Replica_IO_Running: Yes
-# Replica_SQL_Running: Yes
-# Seconds_Behind_Source: 0
+-- Look for:
+-- Replica_IO_Running: Yes
+-- Replica_SQL_Running: Yes
+-- Seconds_Behind_Source: 0
 ```
 
 ### MariaDB Galera Cluster (Multi-Master)
@@ -544,11 +549,21 @@ wsrep_node_name="db-01"              # Change per node
 
 # SST (State Snapshot Transfer) method
 wsrep_sst_method=mariabackup
+
+[sst]
+user=mariabackup
+password=SstPassword123!
 ```
 
 ```bash
 # Bootstrap the cluster (first node ONLY — once only)
 galera_new_cluster
+
+# Create the SST user on the donor before any other node joins.
+# mariabackup refuses the snapshot without these privileges.
+mysql -e "CREATE USER 'mariabackup'@'localhost' IDENTIFIED BY 'SstPassword123!';
+GRANT RELOAD, PROCESS, LOCK TABLES, BINLOG MONITOR ON *.* TO 'mariabackup'@'localhost';
+FLUSH PRIVILEGES;"
 
 # Join other nodes
 systemctl start mysql     # On db-02 and db-03
@@ -890,11 +905,13 @@ Region A                            Region B
 ### AWS Multi-Region DNS failover (Route 53)
 
 ```bash
-# Create primary health check
+# Health-check the primary IP (52.1.2.3) or a regional name such as
+# api-us-east-1.example.com. Do not check the failover name api.example.com.
+# Attach the health check only to the PRIMARY record below.
 aws route53 create-health-check \
   --caller-reference "primary-check-001" \
   --health-check-config '{
-    "FullyQualifiedDomainName": "api.example.com",
+    "IPAddress": "52.1.2.3",
     "Port": 443,
     "Type": "HTTPS",
     "ResourcePath": "/health",
@@ -992,7 +1009,11 @@ mv /etc/kubernetes/manifests/kube-controller-manager.yaml /tmp/
 mv /etc/kubernetes/manifests/kube-scheduler.yaml /tmp/
 mv /etc/kubernetes/manifests/etcd.yaml /tmp/
 
-# Wait until the etcd container is gone, then restore into the data directory.
+# Wait until the etcd container is gone.
+# snapshot restore refuses an existing data directory, so move it aside first.
+mv /var/lib/etcd /var/lib/etcd.bak
+
+# Single-node lab: --force-new-cluster rewrites the restored member as a new cluster.
 ETCDCTL_API=3 etcdctl snapshot restore /backup/etcd-20260302_140000.db \
   --data-dir=/var/lib/etcd \
   --name=cp-01 \
@@ -1064,33 +1085,34 @@ spec:
 
 ### DR Runbook template
 
-```markdown
+~~~~markdown
 # DR Runbook: Production Database Failure
 
-## Trigger conditions
+**Trigger conditions**
 - Primary database unreachable for > 5 minutes
 - Replication lag > 30 minutes
 - Data corruption detected
 
-## Severity: P1 — Critical
+**Severity:** P1 — Critical
 
-## Stakeholders
+**Stakeholders**
 - On-call engineer (PagerDuty escalation)
 - Database team lead
 - Engineering manager (if > 30 min)
 - Communications (if customer-facing > 1 hour)
 
-## Step 1 — Validate the failure (5 min)
+**Step 1 — Validate the failure (5 min)**
 1. Check database health: `mysql -h db-primary -u monitor -e "SELECT 1;"`
 2. Check replica status: `SHOW REPLICA STATUS\G`
 3. Check HAProxy status: http://haproxy:8404/stats
 4. Check CloudWatch/Prometheus alerts
 
-## Step 2 — Escalation decision (2 min)
+**Step 2 — Escalation decision (2 min)**
 - If primary unreachable AND replica lag = 0: Proceed to Step 3 (promote replica)
 - If primary unreachable AND replica lag > 0: Assess data loss vs downtime tradeoff
 
-## Step 3 — Promote replica (10 min)
+**Step 3 — Promote replica (10 min)**
+
 ```sql
 -- On replica server (MySQL 8.0.22+ syntax)
 STOP REPLICA;
@@ -1098,27 +1120,28 @@ RESET REPLICA ALL;
 SET GLOBAL read_only = 0;
 ```
 
-## Step 4 — Update HAProxy (2 min)
+**Step 4 — Update HAProxy (2 min)**
+
 ```bash
 echo "set server mysql_primary/mysql-replica state ready" | socat stdio /run/haproxy/admin.sock
 echo "set server mysql_primary/mysql-primary state maint" | socat stdio /run/haproxy/admin.sock
 ```
 
-## Step 5 — Validate
+**Step 5 — Validate**
 1. Test read/write connectivity to new primary
 2. Check application health endpoints
 3. Monitor error rates for 10 minutes
 
-## Step 6 — Communication
+**Step 6 — Communication**
 - Update status page (status.example.com)
 - Notify stakeholders via Slack #incidents
 - Start incident ticket in PagerDuty
 
-## Step 7 — Post-incident
+**Step 7 — Post-incident**
 - Schedule post-mortem within 48 hours
 - Fix original primary and re-establish replication
 - Update this runbook if process was unclear
-```
+~~~~
 
 ### DR testing checklist
 
@@ -1288,7 +1311,7 @@ flowchart LR
 | **ElastiCache** | Multi-AZ Redis cluster | Auto-failover |
 | **S3** | 11 nines durability | Built-in, no action needed |
 | **ELB** | Cross-zone load balancing | Use ALB for HTTP, NLB for TCP |
-| **Route 53** | Health-check based failover | 60s TTL minimum |
+| **Route 53** | Health-check based failover | Check the primary record |
 | **EKS** | Multi-AZ node groups | Spread pods with topologyKey |
 
 ### Azure
@@ -1379,7 +1402,12 @@ for port in 8001 8002 8003; do
   python3 -m http.server ${port} --directory /tmp/server${port} &
 done
 
-dnf install haproxy -y
+if command -v dnf >/dev/null 2>&1; then
+  sudo dnf install -y haproxy
+else
+  sudo apt-get update
+  sudo apt-get install -y haproxy
+fi
 
 # Lab config. No chroot. The stats socket is on /run, outside any jail.
 sudo tee /etc/haproxy/haproxy.cfg > /dev/null << 'EOF'
@@ -1405,8 +1433,8 @@ backend lab_servers
     server s3 127.0.0.1:8003 check
 EOF
 
-haproxy -f /etc/haproxy/haproxy.cfg -c
-systemctl restart haproxy
+sudo haproxy -f /etc/haproxy/haproxy.cfg -c
+sudo systemctl restart haproxy
 
 while true; do curl -s http://localhost/; sleep 0.5; done
 # Kill the process on 8001 and watch traffic move to 8002 and 8003.
@@ -1415,7 +1443,7 @@ while true; do curl -s http://localhost/; sleep 0.5; done
 
 **Expected:** responses rotate across "Server on port 8001", 8002, and 8003. After you stop 8001, only 8002 and 8003 remain.
 
-**Cleanup:** `kill` the three `python3 -m http.server` processes. `systemctl stop haproxy` if you do not want the lab listener left running.
+**Cleanup:** `kill` the three `python3 -m http.server` processes. `sudo systemctl stop haproxy` if you do not want the lab listener left running.
 
 ---
 
@@ -1424,27 +1452,68 @@ while true; do curl -s http://localhost/; sleep 0.5; done
 **Goal**: Set up MySQL primary-replica replication and simulate failover.
 
 ```bash
-# Use Docker/Podman to run 2 MySQL instances
-docker run -d --name mysql-primary \
-  -e MYSQL_ROOT_PASSWORD=rootpass \
-  -p 3306:3306 mysql:8.0
+docker network create mysql-lab
 
-docker run -d --name mysql-replica \
+docker run -d --name mysql-primary --network mysql-lab \
   -e MYSQL_ROOT_PASSWORD=rootpass \
-  -p 3307:3306 mysql:8.0
+  -p 3306:3306 mysql:8.4 \
+  --server-id=1 \
+  --log-bin=mysql-bin
 
-# Follow the primary-replica setup steps from this module
-# Then:
-# 1. Insert data into primary
-# 2. Verify it appears on replica (SHOW REPLICA STATUS\G)
-# 3. Stop primary container
-# 4. Promote replica: STOP REPLICA; RESET REPLICA ALL; SET GLOBAL read_only=0;
-# 5. Write to the (now primary) replica and verify
+docker run -d --name mysql-replica --network mysql-lab \
+  -e MYSQL_ROOT_PASSWORD=rootpass \
+  -p 3307:3306 mysql:8.4 \
+  --server-id=2 \
+  --log-bin=mysql-bin \
+  --read-only=1
+
+until docker exec mysql-primary mysqladmin ping -uroot -prootpass --silent; do sleep 2; done
+until docker exec mysql-replica mysqladmin ping -uroot -prootpass --silent; do sleep 2; done
+
+docker exec mysql-primary mysql -uroot -prootpass -e "
+CREATE USER 'replicator'@'%' IDENTIFIED BY 'ReplPassword123!';
+GRANT REPLICATION SLAVE ON *.* TO 'replicator'@'%';
+"
+
+# This session holds the read lock until it exits. Do not unlock before the replica
+# has been pointed at the file and position from SHOW BINARY LOG STATUS.
+docker exec mysql-primary mysql -uroot -prootpass \
+  -e "FLUSH TABLES WITH READ LOCK; SELECT SLEEP(30);" &
+sleep 2
+read -r LOG_FILE LOG_POS _ < <(docker exec mysql-primary mysql -uroot -prootpass -N -B -e "SHOW BINARY LOG STATUS")
+
+docker exec mysql-replica mysql -uroot -prootpass -e "
+CHANGE REPLICATION SOURCE TO
+  SOURCE_HOST='mysql-primary',
+  SOURCE_USER='replicator',
+  SOURCE_PASSWORD='ReplPassword123!',
+  SOURCE_LOG_FILE='${LOG_FILE}',
+  SOURCE_LOG_POS=${LOG_POS};
+START REPLICA;
+"
+wait
+
+docker exec mysql-primary mysql -uroot -prootpass -e "
+CREATE DATABASE lab;
+CREATE TABLE lab.t (id INT PRIMARY KEY);
+INSERT INTO lab.t VALUES (1);
+"
+sleep 2
+docker exec mysql-replica mysql -uroot -prootpass -e "SELECT * FROM lab.t; SHOW REPLICA STATUS\G"
+
+docker stop mysql-primary
+docker exec mysql-replica mysql -uroot -prootpass -e "
+STOP REPLICA;
+RESET REPLICA ALL;
+SET GLOBAL read_only=0;
+INSERT INTO lab.t VALUES (2);
+SELECT * FROM lab.t;
+"
 ```
 
 **Expected:** the row inserted on the primary is visible on the replica before promotion. After promotion, a new insert on port 3307 succeeds.
 
-**Cleanup:** `docker rm -f mysql-primary mysql-replica`
+**Cleanup:** `docker rm -f mysql-primary mysql-replica && docker network rm mysql-lab`
 
 ---
 
@@ -1504,7 +1573,28 @@ ETCDCTL_API=3 etcdctl snapshot status /tmp/etcd-backup.db --write-out=table
 kubectl delete namespace backup-test
 
 # Single-node lab only. Do not restore one member into a live 3-node cluster.
-# Follow the static-pod restore in this module (--force-new-cluster into the data dir).
+# kubeadm runs etcd as a static pod. Move the manifests aside so kubelet stops etcd.
+mv /etc/kubernetes/manifests/kube-apiserver.yaml /tmp/
+mv /etc/kubernetes/manifests/kube-controller-manager.yaml /tmp/
+mv /etc/kubernetes/manifests/kube-scheduler.yaml /tmp/
+mv /etc/kubernetes/manifests/etcd.yaml /tmp/
+
+# Wait until the etcd container is gone.
+# snapshot restore refuses an existing data directory, so move it aside first.
+mv /var/lib/etcd /var/lib/etcd.bak
+
+ETCDCTL_API=3 etcdctl snapshot restore /tmp/etcd-backup.db \
+  --data-dir=/var/lib/etcd \
+  --name=cp-01 \
+  --initial-cluster="cp-01=https://192.168.1.10:2380" \
+  --initial-advertise-peer-urls=https://192.168.1.10:2380 \
+  --force-new-cluster
+
+mv /tmp/etcd.yaml /etc/kubernetes/manifests/
+mv /tmp/kube-apiserver.yaml /etc/kubernetes/manifests/
+mv /tmp/kube-controller-manager.yaml /etc/kubernetes/manifests/
+mv /tmp/kube-scheduler.yaml /etc/kubernetes/manifests/
+
 # Verify the namespace returns
 kubectl get namespace backup-test
 ```
@@ -1525,7 +1615,7 @@ kubectl get namespace backup-test
 - [Chaos Mesh Documentation](https://chaos-mesh.org/docs/)
 - [Patroni Documentation](https://patroni.readthedocs.io/)
 - [Velero Documentation](https://velero.io/docs/)
-- [HAProxy Configuration Manual](https://www.haproxy.org/download/2.8/doc/configuration.txt)
+- [HAProxy Configuration Manual](https://docs.haproxy.org/)
 - [Kubernetes PodDisruptionBudget](https://kubernetes.io/docs/tasks/run-application/configure-pdb/)
 - [AWS DR Whitepaper](https://docs.aws.amazon.com/whitepapers/latest/disaster-recovery-workloads-on-aws/disaster-recovery-workloads-on-aws.html)
 - [Site Reliability Engineering — Postmortems](https://sre.google/sre-book/postmortem-culture/)

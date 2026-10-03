@@ -18,14 +18,20 @@
 - [Overview](#overview)
 - [Learning Objectives](#learning-objectives)
 - [The DevSecOps Mindset](#the-devsecops-mindset)
+- [Identity & Access Management (IAM)](#identity--access-management-iam)
 - [RBAC in Kubernetes](#rbac-in-kubernetes)
 - [Secrets Management with HashiCorp Vault](#secrets-management-with-hashicorp-vault)
+- [SAST — Static Application Security Testing](#sast--static-application-security-testing)
+- [DAST — Dynamic Application Security Testing](#dast--dynamic-application-security-testing)
 - [Software Composition Analysis (SCA)](#software-composition-analysis-sca)
 - [Container Security](#container-security)
+- [Policy as Code — OPA & Gatekeeper](#policy-as-code--opa--gatekeeper)
 - [Network Security](#network-security)
 - [Cloud Security Fundamentals](#cloud-security-fundamentals)
 - [Security in CI/CD Pipelines](#security-in-cicd-pipelines)
+- [Compliance & Audit Frameworks](#compliance--audit-frameworks)
 - [Runtime Security with Falco](#runtime-security-with-falco)
+- [Tools & Commands Reference](#tools--commands-reference)
 - [Hands-On Labs](#hands-on-labs)
 - [Further Reading](#further-reading)
 
@@ -64,17 +70,10 @@ flowchart LR
 
 By the end of this module, you will be able to:
 
-- Describe the DevSecOps shift-left philosophy and threat model
-- Apply least-privilege IAM patterns on AWS, Azure, and GCP
-- Configure Kubernetes RBAC for users, service accounts, and namespaces
-- Deploy and operate HashiCorp Vault for dynamic secrets management
-- Integrate SAST, DAST, and SCA tools into CI/CD pipelines
-- Identify and remediate container image vulnerabilities
-- Write and enforce OPA/Gatekeeper policies in Kubernetes
-- Apply Kubernetes NetworkPolicies for micro-segmentation
-- Describe the cloud shared responsibility model
-- Design a security scanning pipeline from commit to deploy
-- Install and configure Falco for runtime threat detection in Kubernetes
+- Start Vault in dev mode, write a KV secret, and list it
+- Scan a container image and read the vulnerability table
+- Apply a Role and a RoleBinding and confirm a forbidden request
+- Apply a Gatekeeper ConstraintTemplate and see a non-compliant pod rejected
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -502,7 +501,10 @@ path "secret/data/myapp/*" {
   capabilities = ["read"]
 }
 
-# vault kv list reads metadata, not data
+# vault kv list secret/myapp needs list on the folder itself and on its children
+path "secret/metadata/myapp" {
+  capabilities = ["list"]
+}
 path "secret/metadata/myapp/*" {
   capabilities = ["list"]
 }
@@ -547,16 +549,21 @@ metadata:
   name: my-api
   namespace: production
 spec:
+  selector:
+    matchLabels:
+      app: my-api
   template:
     metadata:
+      labels:
+        app: my-api
       annotations:
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/role: "my-api"
         vault.hashicorp.com/agent-inject-secret-db: "secret/data/myapp/database"
         vault.hashicorp.com/agent-inject-template-db: |
           {{- with secret "secret/data/myapp/database" -}}
-          DB_USER={{ .Data.data.username }}
-          DB_PASS={{ .Data.data.password }}
+          export DB_USER={{ .Data.data.username }}
+          export DB_PASS={{ .Data.data.password }}
           {{- end }}
     spec:
       serviceAccountName: my-api
@@ -592,7 +599,7 @@ SAST analyzes source code **without executing it** to find security vulnerabilit
 
 ```bash
 # Install
-pip install semgrep
+pipx install semgrep
 
 # Run with OWASP ruleset
 semgrep --config=p/owasp-top-ten ./src
@@ -605,11 +612,11 @@ cat > no-hardcoded-secrets.yml << 'EOF'
 rules:
   - id: hardcoded-password
     pattern-either:
-      - pattern: password = "..."
-      - pattern: PASSWORD = "..."
-      - pattern: passwd = "..."
-    message: "Hardcoded password detected: $X"
-    languages: [python, javascript, go]
+      - pattern: password = "$PASS"
+      - pattern: PASSWORD = "$PASS"
+      - pattern: passwd = "$PASS"
+    message: "Hardcoded password detected: $PASS"
+    languages: [python, javascript]
     severity: ERROR
 EOF
 
@@ -1719,6 +1726,9 @@ cat > readonly.hcl << 'EOF'
 path "secret/data/myapp/*" {
   capabilities = ["read"]
 }
+path "secret/metadata/myapp" {
+  capabilities = ["list"]
+}
 path "secret/metadata/myapp/*" {
   capabilities = ["list"]
 }
@@ -1817,10 +1827,48 @@ kubectl auth can-i delete pods \
 ```bash
 # Install Gatekeeper
 kubectl apply -f https://raw.githubusercontent.com/open-policy-agent/gatekeeper/v3.15.0/deploy/gatekeeper.yaml
+kubectl create namespace production
 
-# Apply the RequireRunAsNonRoot ConstraintTemplate from this module
-kubectl apply -f constraint-template.yaml
-kubectl apply -f constraint.yaml
+# ConstraintTemplate and Constraint from this chapter, before any test pod
+kubectl apply -f - << 'EOF'
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: requirerunasnonroot
+spec:
+  crd:
+    spec:
+      names:
+        kind: RequireRunAsNonRoot
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package requirerunasnonroot
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.runAsNonRoot
+          msg := sprintf("Container '%v' must set runAsNonRoot=true", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.initContainers[_]
+          not container.securityContext.runAsNonRoot
+          msg := sprintf("Init container '%v' must set runAsNonRoot=true", [container.name])
+        }
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: RequireRunAsNonRoot
+metadata:
+  name: require-run-as-non-root
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["production", "staging"]
+  enforcementAction: deny
+EOF
 
 # Try to deploy a root container (should be denied)
 kubectl apply -f - << 'EOF'
@@ -1868,7 +1916,7 @@ EOF
 
 **Expected:** `root-test` is rejected. `nonroot-test` reaches Running.
 
-**Cleanup:** `kubectl delete pod root-test nonroot-test -n production --ignore-not-found`
+**Cleanup:** `kubectl delete requirerunasnonroot require-run-as-non-root` and `kubectl delete namespace production`
 
 ---
 

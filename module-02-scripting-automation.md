@@ -61,10 +61,9 @@ By the end of this module you will be able to:
 - Handle errors gracefully and use exit codes correctly
 - Process and transform text data using `awk` and `sed`
 - Parse, query, and transform JSON data using `jq`
-- Schedule recurring tasks using `cron`
 - Write Python scripts for common DevOps tasks (file ops, API calls, parsing JSON)
-- Write production-grade Bash scripts with structured logging, locking, and retries
-- Automate infrastructure tasks: health checks, deployment scripts, backup automation
+- Write a Bash script with structured logging
+- Automate a backup into a timestamped archive
 
 [↑ Back to TOC](#table-of-contents)
 
@@ -639,11 +638,11 @@ awk -F, '{print $2}' data.csv        # CSV: print second column
 
 # Filter and print
 awk '$9 == "404" {print $1, $7}' access.log   # Show IPs with 404 errors
-awk '$5 > 1000000 {print $9}' access.log      # Large requests (> 1 MB)
+awk '$10 > 1000000 {print $9}' access.log     # Combined log: bytes are field 10, not 5
 awk '/ERROR/ {print NR": "$0}' app.log        # Print ERROR lines with line numbers
 
 # BEGIN and END blocks
-awk 'BEGIN {print "Report:"} {sum += $5} END {print "Total bytes:", sum}' access.log
+awk 'BEGIN {print "Report:"} {sum += $10} END {print "Total bytes:", sum}' access.log
 
 # Calculations
 awk '{sum += $5} END {printf "Average: %.2f\n", sum/NR}' report.txt
@@ -1159,6 +1158,9 @@ An idempotent script can be run multiple times with the same result — safe to 
 #!/bin/bash
 set -euo pipefail
 
+log_info()  { printf 'INFO %s\n' "$*"; }
+log_debug() { printf 'DEBUG %s\n' "$*"; }
+
 # Idempotent directory creation
 ensure_dir() {
     local dir=$1
@@ -1329,10 +1331,11 @@ FAILURES=()
 check_http() {
     local url=$1 name=$2
     local response
-    response=$(curl -sf -w "%{http_code}" -o /dev/null --max-time "$TIMEOUT" "$url" 2>/dev/null) || {
+    response=$(curl -s -o /dev/null -w "%{http_code}" --max-time "$TIMEOUT" "$url") || response=000
+    if [ "$response" = "000" ]; then
         FAILURES+=("$name ($url): connection failed")
         return 1
-    }
+    fi
     if [ "$response" != "200" ]; then
         FAILURES+=("$name ($url): HTTP $response")
         return 1
@@ -1348,8 +1351,7 @@ done
 if [ ${#FAILURES[@]} -gt 0 ]; then
     echo "FAILURES detected:"
     printf '  - %s\n' "${FAILURES[@]}"
-    # Send alert (requires mail or mailx)
-    printf '%s\n' "${FAILURES[@]}" | mail -s "Health Check Failed" "$ALERT_EMAIL"
+    printf 'Alert for %s\n' "$ALERT_EMAIL"
     exit 1
 fi
 
@@ -1379,14 +1381,18 @@ rollback() {
 }
 trap 'rollback' ERR
 
-# 1. Stage the release directory that was unpacked next to this script.
-#    Container image pull is module 05. This script copies files only.
-log "Staging release: ${VERSION}"
-rsync -a "./releases/${VERSION}/" "${DEPLOY_DIR}/"
-
-# 2. Backup current deployment
+# 1. Backup the current tree before replacing it. A backup taken after
+#    the copy would restore the failed release.
 log "Backing up current deployment"
-[ -d "$DEPLOY_DIR" ] && rsync -a "$DEPLOY_DIR/" "$BACKUP_DIR/"
+if [ -d "$DEPLOY_DIR" ]; then
+    rm -rf "$BACKUP_DIR"
+    rsync -a "$DEPLOY_DIR/" "$BACKUP_DIR/"
+fi
+
+# 2. Stage the release directory. Container image pull is module 05.
+log "Staging release: ${VERSION}"
+mkdir -p "$DEPLOY_DIR"
+rsync -a "./releases/${VERSION}/" "${DEPLOY_DIR}/"
 
 # 3. Deploy
 log "Deploying version $VERSION"
@@ -1399,7 +1405,7 @@ systemctl restart "$APP"
 # 5. Health check
 log "Waiting for service to be healthy..."
 for i in {1..30}; do
-    if curl -sf http://localhost:3000/health &>/dev/null; then
+    if curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/health | grep -q '^200$'; then
         log "Deployment successful: $VERSION"
         exit 0
     fi
@@ -1607,6 +1613,7 @@ Run `python healthcheck.py`.
 ### Lab 2.6 — Backup Automation Script
 
 ```bash
+cat > backup.sh << 'EOF'
 #!/bin/bash
 set -euo pipefail
 src=${1:?source directory}
@@ -1619,9 +1626,7 @@ log "creating ${archive}"
 tar -czf "$archive" -C "$(dirname "$src")" "$(basename "$src")"
 find "$dest" -name 'backup-*.tar.gz' -mtime +7 -delete
 log "done"
-```
-
-```bash
+EOF
 mkdir -p /tmp/backup-src /tmp/backup-dest
 echo hello > /tmp/backup-src/note.txt
 bash backup.sh /tmp/backup-src /tmp/backup-dest

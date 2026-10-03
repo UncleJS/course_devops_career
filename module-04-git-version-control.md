@@ -496,9 +496,9 @@ main (trunk) ← all developers commit here directly, or via very short branches
 git stash                           # Stash current changes
 git stash push -m "WIP: login feature"  # Stash with a name
 git stash push -u -m "with untracked"   # Include untracked files
-git stash list                      # List all stashes
-git stash show stash@{0}            # Show what's in a stash
-git stash show -p stash@{0}         # Show the full diff
+git --no-pager stash list           # List all stashes
+git --no-pager stash show stash@{0} # Show what's in a stash
+git --no-pager stash show -p stash@{0}  # Show the full diff
 git stash pop                       # Apply and remove top stash
 git stash apply stash@{1}           # Apply a specific stash without removing
 git stash drop stash@{1}            # Delete a specific stash
@@ -1116,7 +1116,7 @@ echo one > file.txt && git add file.txt && git commit -m "first"
 echo two >> file.txt && git commit -am "second"
 git reset --hard HEAD~1
 echo 'after reset:' && cat file.txt
-git reflog
+git --no-pager reflog
 git reset --hard 'HEAD@{1}'
 echo 'after restore:' && cat file.txt
 git --no-pager log --oneline

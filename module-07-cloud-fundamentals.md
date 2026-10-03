@@ -558,17 +558,18 @@ aws sts get-caller-identity
 ```bash
 # Install
 curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-
-# Login
-az login                            # Opens browser
-az login --service-principal ...   # For automation
-
-# Set subscription
 az account list --output table
-az account set --subscription "My Subscription"
-
-# Test
 az account show
+```
+
+```bash
+# Login. This opens a browser, so it stays in its own fence.
+az login
+```
+
+```bash
+# az login --service-principal is for automation. Do not paste a placeholder.
+# az account set --subscription "My Subscription"
 ```
 
 ### gcloud CLI Setup
@@ -576,15 +577,22 @@ az account show
 ```bash
 # Install
 curl https://sdk.cloud.google.com | bash
-exec -l $SHELL
+# exec -l $SHELL replaces this shell and drops the rest of a paste.
+```
 
-# Initialize
+```bash
 gcloud init
+```
 
-# Login
+```bash
 gcloud auth login
-gcloud auth application-default login   # For SDKs/tools
+```
 
+```bash
+gcloud auth application-default login
+```
+
+```bash
 # Set project
 gcloud config set project my-project-id
 

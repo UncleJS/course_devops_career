@@ -474,8 +474,8 @@ pkill -f "python app.py"  # Kill by full command pattern
 # Background & foreground jobs
 sleep 300 &         # Run in background
 jobs                # List background jobs
-fg %1               # Bring job 1 to foreground
-bg %1               # Send stopped job to background
+# fg %1             # Bring job 1 to foreground. This waits until the job ends.
+# bg %1             # Send a stopped job to background
 # Ctrl+Z pauses the foreground job. It is a keypress, not a command.
 nohup command &     # Run immune to hangup (survives logout)
 disown %1           # Detach job from shell
@@ -505,34 +505,29 @@ Public-key authentication works through asymmetric cryptography. You generate a 
 The SSH agent solves a practical problem: your private key should be encrypted with a passphrase, but you do not want to type that passphrase for every connection. `ssh-agent` runs as a background process in your session, holds your decrypted private key in memory, and answers authentication challenges on your behalf. `ssh-add` loads keys into the agent. When working across multiple servers or using agent forwarding (`ssh -A`), the agent allows you to authenticate to hosts you cannot reach directly without copying your private key to intermediate servers — a critical security practice.
 
 ```bash
-ssh user@hostname           # Connect to remote host
-ssh user@192.168.1.10       # Connect using IP address
-ssh -p 2222 user@host       # Connect on a non-standard port
-ssh -i ~/.ssh/my_key user@host  # Connect using a specific key
-ssh -v user@host            # Verbose mode (debug connection issues)
+# These connect to a remote host and stop a paste. Run one when you have a host.
+# ssh user@hostname
+# ssh user@192.168.1.10
+# ssh -p 2222 user@host
+# ssh -i ~/.ssh/my_key user@host
+# ssh -v user@host
 
-# Generate an SSH key pair
-ssh-keygen -t ed25519 -C "your_email@example.com"
-# Creates: ~/.ssh/id_ed25519 (private) and ~/.ssh/id_ed25519.pub (public)
-
-# Key types and when to use them
-# ed25519  — modern, fast, secure (recommended)
-# rsa      — widely compatible, use -b 4096 for strength
-# ecdsa    — elliptic curve, good for older systems
+# Generate an SSH key pair. Lab 1.4 already creates ~/.ssh/id_ed25519.
+# ssh-keygen -t ed25519 -C "your_email@example.com" -f ~/.ssh/id_ed25519 -N ""
 
 # Copy your public key to a remote server
-ssh-copy-id user@hostname
-ssh-copy-id -i ~/.ssh/id_ed25519.pub user@hostname  # Specify key
+# ssh-copy-id user@hostname
+# ssh-copy-id -i ~/.ssh/id_ed25519.pub user@hostname
 
 # Securely copy files
-scp file.txt user@host:/remote/path/     # Local → Remote
-scp user@host:/remote/file.txt ./        # Remote → Local
-scp -r folder/ user@host:/remote/path/  # Copy directory
+# scp file.txt user@host:/remote/path/
+# scp user@host:/remote/file.txt ./
+# scp -r folder/ user@host:/remote/path/
 
 # rsync — efficient sync (only transfers changes)
-rsync -avz ./local/ user@host:/remote/  # Sync directory to remote
-rsync -avz --delete ./local/ user@host:/remote/  # Sync + delete extras
-rsync -avz -e "ssh -p 2222" ./local/ user@host:/remote/  # Custom port
+# rsync -avz ./local/ user@host:/remote/
+# rsync -avz --delete ./local/ user@host:/remote/
+# rsync -avz -e "ssh -p 2222" ./local/ user@host:/remote/
 ```
 
 ### SSH Config File
@@ -565,18 +560,18 @@ Host *
 ```
 
 ```bash
-# With the config above:
-ssh prod            # Connects to 192.168.1.10 as alice
-ssh internal        # Connects via bastion (SSH jump host)
+# With the config above. These wait on a remote host.
+# ssh prod
+# ssh internal
 
 # SSH agent — cache passphrase in memory
 eval $(ssh-agent)
-ssh-add ~/.ssh/id_ed25519
+# ssh-add ~/.ssh/id_ed25519
 
-# SSH tunneling
-ssh -L 5432:db-host:5432 user@bastion  # Forward local port 5432 to remote DB
-ssh -L 8080:localhost:80 user@server   # Browse remote web server locally
-ssh -R 8080:localhost:3000 user@server # Expose local app on remote port
+# SSH tunneling. Each of these stays open.
+# ssh -L 5432:db-host:5432 user@bastion
+# ssh -L 8080:localhost:80 user@server
+# ssh -R 8080:localhost:3000 user@server
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -855,8 +850,8 @@ systemctl list-units --type=service --all   # Including inactive
 systemctl list-unit-files --type=service    # All installed service files
 
 # View logs for a service
-journalctl -u nginx             # All logs for nginx
-journalctl -u nginx -f          # Follow logs in real time
+journalctl -u nginx --no-pager -n 20
+# journalctl -u nginx -f        # Follow logs. This does not return.
 journalctl -u nginx --since "1 hour ago"
 journalctl -u nginx --since "2026-01-01" --until "2026-01-02"
 journalctl -p err               # Show only error-level entries

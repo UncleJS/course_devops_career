@@ -1751,7 +1751,7 @@ nc -zv -w 3 localhost 8080 || true
 
 `ufw limit` must be the SSH rule. An earlier `ufw allow 22/tcp` would match first and the limit would never run. `ufw` allows the loopback interface, so `nc` to `localhost` does not test the firewall.
 
-**Expected:** Status is `active`. Rules include `22/tcp LIMIT` and `80/tcp ALLOW`. `nc -zv -w 3 "$VM_IP" 8080` times out. `nc -zv localhost 8080` is connection refused if nothing is listening, which is not a firewall drop.
+**Expected:** Status is `active`. Rules include `22/tcp LIMIT` and `80/tcp ALLOW`. `nc -zv -w 3 "$VM_IP" 8080` times out. `nc -zv -w 3 localhost 8080` is connection refused if nothing is listening, which is not a firewall drop.
 
 **Cleanup:** `sudo ufw disable`
 
@@ -1806,6 +1806,11 @@ listen stats
 
 ```bash
 sudo haproxy -c -f ~/labs/haproxy/haproxy.cfg
+```
+
+Leave this running. The next paragraph uses a second terminal.
+
+```bash
 sudo haproxy -f ~/labs/haproxy/haproxy.cfg -db
 ```
 

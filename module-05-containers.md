@@ -168,8 +168,9 @@ sudo apt remove docker docker-engine docker.io containerd runc
 curl -fsSL https://get.docker.com | sh
 
 # Add your user to the docker group (avoid using sudo)
-sudo usermod -aG docker $USER
-newgrp docker
+sudo usermod -aG docker "$USER"
+# newgrp docker starts a new shell and swallows the rest of this paste.
+# Log out and back in before these docker commands if this user was just added to the group.
 
 # Verify
 docker version
@@ -272,13 +273,13 @@ podman image inspect nginx:1.25
 # docker run nginx                 # Foreground. This blocks the rest of a paste.
 docker run -d nginx                  # Run detached (background)
 # docker run -it ubuntu:24.04 bash  # Interactive. Run it in its own terminal.
-docker run --name webserver nginx    # Give it a name
-docker run -p 8080:80 nginx          # Map host port 8080 → container port 80
-docker run -p 127.0.0.1:8080:80 nginx  # Bind to localhost only
-docker run -e ENV_VAR=value nginx    # Set environment variable
-docker run -v /host/path:/container/path nginx  # Mount a volume
-docker run --rm nginx                # Auto-remove container when stopped
-docker run -d --restart always nginx # Always restart if it crashes
+# docker run --name webserver nginx # Foreground. This blocks the rest of a paste.
+# docker run -p 8080:80 nginx
+# docker run -p 127.0.0.1:8080:80 nginx
+# docker run -e ENV_VAR=value nginx
+# docker run -v /host/path:/container/path nginx
+# docker run --rm nginx
+docker run -d --restart always --name nginx-always nginx
 
 # Same with Podman:
 podman run -d -p 8080:80 --name webserver nginx
@@ -310,8 +311,10 @@ podman inspect webserver
 ```
 
 ```bash
-# Interactive shells. Each is its own command.
 docker exec -it webserver bash
+```
+
+```bash
 podman exec -it webserver bash
 ```
 
@@ -599,11 +602,11 @@ networks:
 docker compose up -d                # Start all services in background
 docker compose down                 # Stop and remove containers
 docker compose down -v              # Also remove volumes
-docker compose ps                   # Show status of services
-docker compose logs -f              # Follow all service logs
-docker compose logs -f web          # Follow logs of one service
-docker compose exec web bash        # Open shell in running service
-docker compose build                # Rebuild images
+docker compose ps
+# docker compose logs -f
+# docker compose logs -f web
+# docker compose exec web bash
+docker compose build
 docker compose pull                 # Pull latest images
 docker compose restart web          # Restart one service
 
@@ -612,7 +615,7 @@ docker compose restart web          # Restart one service
 podman-compose up -d
 podman-compose down
 podman-compose ps
-podman-compose logs -f
+# podman-compose logs -f
 ```
 
 [↑ Back to TOC](#table-of-contents)
@@ -1105,7 +1108,7 @@ systemctl --user enable webserver
 systemctl --user status webserver
 
 # Logs
-journalctl --user -u webserver -f
+# journalctl --user -u webserver -f
 ```
 
 ##### Example: Network + two containers
@@ -1770,7 +1773,7 @@ curl -s -o /dev/null -w "docker:%{http_code}\n" http://localhost:8080
 docker ps
 ```
 
-**Expected result:** The curl prints `200`. `docker ps` shows `nginx-docker`.
+**Expected result:** The curl prints `docker:200`. `docker ps` shows `nginx-docker`.
 
 **Cleanup:**
 

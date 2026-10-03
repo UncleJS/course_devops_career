@@ -1898,7 +1898,7 @@ flux get kustomizations
 flux get helmreleases -A
 flux reconcile source git infra-repo
 flux reconcile kustomization my-api
-flux logs --follow
+flux logs --tail=50
 flux check
 ```
 

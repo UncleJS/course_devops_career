@@ -338,7 +338,7 @@ Elasticsearch is a distributed, document-oriented search and analytics engine bu
 curl -s http://localhost:9200/_cluster/health | jq .
 
 # List all indices
-curl -s http://localhost:9200/_cat/indices?v
+curl -s 'http://localhost:9200/_cat/indices?v'
 
 # Create an index with explicit mapping
 curl -X PUT http://localhost:9200/app-logs-2026.03 \
@@ -1855,7 +1855,7 @@ until curl -sf http://localhost:9200 >/dev/null; do sleep 2; done
 
 curl -s 'http://localhost:9200/_cluster/health?pretty'
 
-curl -s -X POST 'http://localhost:9200/app-logs-lab/_doc' \
+curl -s -X POST 'http://localhost:9200/app-logs-lab/_doc?refresh=true' \
   -H 'Content-Type: application/json' \
   -d '{"message":"lab event","service":"lab","level":"info"}'
 

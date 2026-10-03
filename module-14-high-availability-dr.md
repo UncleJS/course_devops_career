@@ -997,6 +997,7 @@ For production Kubernetes, run **3 or 5 control plane nodes** (odd number for et
 
 ```bash
 # Backup etcd (run on control plane node)
+sudo apt-get install -y etcd-client
 SNAP=/backup/etcd-snapshot.db
 sudo ETCDCTL_API=3 etcdctl snapshot save "$SNAP" \
   --endpoints=https://127.0.0.1:2379 \
@@ -1006,6 +1007,10 @@ sudo ETCDCTL_API=3 etcdctl snapshot save "$SNAP" \
 
 # Verify snapshot
 sudo ETCDCTL_API=3 etcdctl snapshot status "$SNAP" --write-out=table
+
+# Read the live member name and peer URL before the manifest is moved.
+ETCD_NAME=$(sudo grep -oE -- '--name=[^ ]+' /etc/kubernetes/manifests/etcd.yaml | head -1 | cut -d= -f2)
+PEER=$(sudo grep -oE -- '--initial-advertise-peer-urls=[^ ]+' /etc/kubernetes/manifests/etcd.yaml | head -1 | cut -d= -f2-)
 
 # kubeadm runs etcd as a static pod. Do not systemctl stop etcd.
 # Do not restore one member into a live 3-node cluster.
@@ -1023,9 +1028,9 @@ sudo mv /var/lib/etcd /var/lib/etcd.bak
 # Single-node lab: --force-new-cluster rewrites the restored member as a new cluster.
 sudo ETCDCTL_API=3 etcdctl snapshot restore "$SNAP" \
   --data-dir=/var/lib/etcd \
-  --name=cp-01 \
-  --initial-cluster="cp-01=https://192.168.1.10:2380" \
-  --initial-advertise-peer-urls=https://192.168.1.10:2380 \
+  --name="$ETCD_NAME" \
+  --initial-cluster="${ETCD_NAME}=${PEER}" \
+  --initial-advertise-peer-urls="$PEER" \
   --force-new-cluster
 
 # Put the static pod manifests back. kubelet starts API server and etcd.
@@ -1198,6 +1203,7 @@ The key discipline in chaos engineering is the scientific method: define a stead
 # Install Chaos Mesh
 helm repo add chaos-mesh https://charts.chaos-mesh.org
 helm install chaos-mesh chaos-mesh/chaos-mesh \
+  --version 2.7.0 \
   --namespace chaos-mesh \
   --create-namespace \
   --set chaosDaemon.runtime=containerd \
@@ -1358,19 +1364,19 @@ echo "show servers state" | socat stdio /run/haproxy/admin.sock
 # Keepalived
 systemctl status keepalived
 ip addr show eth0 | grep 192.168.1.100            # Check if VIP is local
-journalctl -u keepalived -f                       # Watch failover events
+journalctl -u keepalived -n 50 --no-pager
 
-# MySQL Replication (MySQL 8.0.22+ syntax)
-SHOW BINARY LOG STATUS\G               # On primary (was: SHOW MASTER STATUS)
-SHOW REPLICA STATUS\G                  # On replica (was: SHOW SLAVE STATUS)
-SHOW REPLICAS\G                        # List replicas (was: SHOW SLAVE HOSTS)
-STOP REPLICA; START REPLICA;           # Control replica thread
-RESET REPLICA ALL;                     # Remove replication config
+# MySQL replication. These are SQL statements, not shell commands.
+# mysql -e 'SHOW BINARY LOG STATUS\G'
+# mysql -e 'SHOW REPLICA STATUS\G'
+# mysql -e 'SHOW REPLICAS\G'
+# mysql -e 'STOP REPLICA; START REPLICA;'
+# mysql -e 'RESET REPLICA ALL;'
 
 # Galera
-SHOW STATUS LIKE 'wsrep_cluster_size';
-SHOW STATUS LIKE 'wsrep_local_state_comment';
-SHOW STATUS LIKE 'wsrep_connected';
+# mysql -e "SHOW STATUS LIKE 'wsrep_cluster_size';"
+# mysql -e "SHOW STATUS LIKE 'wsrep_local_state_comment';"
+# mysql -e "SHOW STATUS LIKE 'wsrep_connected';"
 
 # etcd
 ETCDCTL_API=3 etcdctl member list
@@ -1563,6 +1569,7 @@ kubectl get pdb lab-app-pdb
 
 ```bash
 # On a kubeadm cluster control plane node
+sudo apt-get install -y etcd-client
 
 # Create some test data
 kubectl create namespace backup-test

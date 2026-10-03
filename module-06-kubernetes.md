@@ -154,7 +154,13 @@ Worker nodes run your application containers.
 # Install and start minikube
 minikube start
 minikube status
-minikube dashboard          # Open web UI
+```
+
+```bash
+minikube dashboard
+```
+
+```bash
 minikube stop
 ```
 
@@ -1692,12 +1698,12 @@ until kubectl top pods -l app=cpu-burner 2>/dev/null | grep -E '[0-9]+m'; do
   sleep 5
 done
 kubectl top pods -l app=cpu-burner
-kubectl get hpa cpu-burner -w
+timeout 180 kubectl get hpa cpu-burner -w || true
 ```
 
 **Expected result:** `kubectl top` shows CPU usage for `cpu-burner`. Within a few minutes the HPA raises replicas above 1, up to 3, because usage stays above 50% of the CPU request.
 
-**Cleanup:** Press Ctrl-C to leave the watch, then:
+**Cleanup:** the watch stops after 180 seconds. Then:
 
 ```bash
 kubectl delete -f cpu-burner.yaml

@@ -342,13 +342,13 @@ terraform plan      # or: tofu plan
 # Green = create, yellow = modify, red = destroy
 
 # 3. Apply — create/update infrastructure
-terraform apply     # or: tofu apply
-# Prompts for confirmation unless you use -auto-approve
+# terraform apply prompts unless you pass -auto-approve
+# terraform apply
 terraform apply -auto-approve
 
-# 4. Destroy — tear down all resources
-terraform destroy   # or: tofu destroy
-# DANGEROUS in production — always review carefully
+# terraform destroy prompts unless you pass -auto-approve
+# terraform destroy
+terraform destroy -auto-approve
 
 # Other useful commands
 terraform fmt                    # Format code to HCL standard
@@ -996,18 +996,13 @@ inputs = {
 ```
 
 ```bash
-# Install Terragrunt
-brew install terragrunt          # macOS
-# or download from https://github.com/gruntwork-io/terragrunt/releases
+# macOS: brew install terragrunt
+# Ubuntu: download a release from https://github.com/gruntwork-io/terragrunt/releases
 
-# Run against a single module
-terragrunt apply
-
-# Run against all modules in a directory tree (respects dependencies)
-terragrunt run-all apply
-
-# Plan everything in staging
-terragrunt run-all plan --terragrunt-working-dir infrastructure/staging
+# terragrunt apply prompts. These stay commented.
+# terragrunt apply
+# terragrunt run-all apply
+# terragrunt run-all plan --terragrunt-working-dir infrastructure/staging
 ```
 
 ### Backend Migration

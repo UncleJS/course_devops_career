@@ -993,13 +993,13 @@ chmod +x cosign-linux-amd64 && sudo mv cosign-linux-amd64 /usr/local/bin/cosign
 COSIGN_PASSWORD=lab cosign generate-key-pair
 
 # Sign an image
-cosign sign --key cosign.key registry.example.com/myapp:1.2.3
+COSIGN_PASSWORD=lab cosign sign --key cosign.key registry.example.com/myapp:1.2.3
 
 # Verify signature
 cosign verify --key cosign.pub registry.example.com/myapp:1.2.3
 
-# Sign with GitHub OIDC (keyless — Sigstore)
-cosign sign registry.example.com/myapp:1.2.3  # Prompts OIDC login
+# Keyless sign opens a browser. It stays commented.
+# cosign sign registry.example.com/myapp:1.2.3
 ```
 
 ```mermaid
@@ -1698,7 +1698,7 @@ kubectl apply -f https://raw.githubusercontent.com/aquasecurity/kube-bench/main/
 kubectl logs -l app=kube-bench
 
 # Cosign
-cosign sign --key cosign.key registry.example.com/myapp:1.2.3
+COSIGN_PASSWORD=lab cosign sign --key cosign.key registry.example.com/myapp:1.2.3
 cosign verify --key cosign.pub registry.example.com/myapp:1.2.3
 
 # Falco

@@ -305,15 +305,17 @@ git fetch --all --prune             # Fetch from all remotes, remove stale track
 ### SSH vs HTTPS Authentication
 
 ```bash
-# Generate an SSH key for GitHub/GitLab
-ssh-keygen -t ed25519 -C "you@example.com" -f ~/.ssh/id_ed25519_github
+# Generate an SSH key for GitHub. -N "" skips the passphrase prompt.
+ssh-keygen -t ed25519 -C "you@example.com" -f ~/.ssh/id_ed25519_github -N ""
 
-# Add to SSH agent
-ssh-add ~/.ssh/id_ed25519_github
+# Add to SSH agent. ssh-add prompts if the key has a passphrase.
+# ssh-add ~/.ssh/id_ed25519_github
 
-# Test connection
-ssh -T git@github.com
+# Test connection. This waits on GitHub.
+# ssh -T git@github.com
+```
 
+```
 # ~/.ssh/config — multiple GitHub accounts
 Host github-personal
     HostName github.com

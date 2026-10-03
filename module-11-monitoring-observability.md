@@ -560,11 +560,11 @@ flowchart LR
 
 ### Grafana Installation & Data Sources
 
-#### Install via package manager
+#### Install Grafana on Rocky 9
 
 ```bash
-# Add Grafana repo (RHEL/CentOS)
-cat > /etc/yum.repos.d/grafana.repo << 'EOF'
+# Rocky 9. The Ubuntu install is the next fence.
+sudo tee /etc/yum.repos.d/grafana.repo > /dev/null << 'EOF'
 [grafana]
 name=grafana
 baseurl=https://packages.grafana.com/oss/rpm
@@ -574,8 +574,8 @@ gpgcheck=1
 gpgkey=https://packages.grafana.com/gpg.key
 EOF
 
-dnf install grafana -y
-systemctl enable --now grafana-server
+sudo dnf install -y grafana
+sudo systemctl enable --now grafana-server
 
 # Default: http://localhost:3000  admin/admin
 ```
@@ -1115,20 +1115,22 @@ SNMP (Simple Network Management Protocol) is used to monitor network devices, sw
 #### SNMP configuration on the host (Linux)
 
 ```bash
-# Install net-snmp
-dnf install -y net-snmp net-snmp-utils
+sudo apt install -y snmp snmpd
+sudo systemctl enable --now snmpd
+```
 
+```
 # /etc/snmp/snmpd.conf
 rocommunity  public   127.0.0.1
-rocommunity  zabbix_ro  192.168.1.10     # Allow Zabbix server
+rocommunity  zabbix_ro  192.168.1.10
 syslocation  "DataCenter Row 3 Rack 7"
 syscontact   ops@example.com
+```
 
-systemctl enable --now snmpd
-
-# Test from Zabbix server
-snmpwalk -v2c -c zabbix_ro 192.168.1.5 system
-snmpget -v2c -c zabbix_ro 192.168.1.5 .1.3.6.1.2.1.1.5.0
+```bash
+# Test from the Zabbix server. These need a host that answers SNMP.
+# snmpwalk -v2c -c zabbix_ro 192.168.1.5 system
+# snmpget -v2c -c zabbix_ro 192.168.1.5 .1.3.6.1.2.1.1.5.0
 ```
 
 #### SNMPv3 (secure)

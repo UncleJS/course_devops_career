@@ -845,17 +845,17 @@ sudo systemctl is-active nginx  # Check if running (returns "active" or "inactiv
 sudo systemctl is-enabled nginx # Check if enabled for boot
 
 # View service list
-systemctl list-units --type=service         # All active services
-systemctl list-units --type=service --all   # Including inactive
-systemctl list-unit-files --type=service    # All installed service files
+systemctl list-units --type=service --no-pager         # All active services
+systemctl list-units --type=service --all --no-pager   # Including inactive
+systemctl list-unit-files --type=service --no-pager    # All installed service files
 
 # View logs for a service
 journalctl -u nginx --no-pager -n 20
 # journalctl -u nginx -f        # Follow logs. This does not return.
-journalctl -u nginx --since "1 hour ago"
-journalctl -u nginx --since "2026-01-01" --until "2026-01-02"
-journalctl -p err               # Show only error-level entries
-journalctl -p err -xe           # Error + context + extra info (use when debugging)
+journalctl -u nginx --since "1 hour ago" --no-pager
+journalctl -u nginx --since "2026-01-01" --until "2026-01-02" --no-pager
+journalctl -p err --no-pager    # Show only error-level entries
+journalctl -p err -xe --no-pager  # Error + context + extra info (use when debugging)
 journalctl --disk-usage         # How much space logs are using
 journalctl --vacuum-size=500M   # Trim logs to 500 MB
 journalctl --vacuum-time=7d     # Delete logs older than 7 days

@@ -942,7 +942,7 @@ WantedBy=timers.target
 ```bash
 # The unit files above are examples. Enable the timer only after you write them to /etc/systemd/system.
 # sudo systemctl enable --now backup.timer
-systemctl list-timers
+systemctl list-timers --no-pager
 journalctl -u backup.service --no-pager -n 20 || true
 ```
 
